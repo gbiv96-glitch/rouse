@@ -200,6 +200,7 @@ export default function HomeScreen() {
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ritualOpacity = useRef(new Animated.Value(0)).current;
+  const revealOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (!showRitualScreen) return;
@@ -230,6 +231,18 @@ export default function HomeScreen() {
       animation.stop();
     };
   }, [ritualOpacity, showRitualScreen]);
+
+  useEffect(() => {
+    if (!sanctuaryReveal) return;
+
+    revealOpacity.setValue(0);
+
+    Animated.timing(revealOpacity, {
+      toValue: 1,
+      duration: 520,
+      useNativeDriver: true,
+    }).start();
+  }, [revealOpacity, sanctuaryReveal]);
 
   useEffect(() => {
     const loadSavedData = async () => {
@@ -725,8 +738,9 @@ export default function HomeScreen() {
         <View style={styles.sessionGlowOne} />
         <View style={styles.sessionGlowTwo} />
 
-        <ScrollView contentContainerStyle={styles.revealContent}>
-          <ThemedText style={styles.revealEyebrow}>Session complete</ThemedText>
+        <Animated.View style={[styles.revealAnimatedShell, { opacity: revealOpacity }]}>
+          <ScrollView contentContainerStyle={styles.revealContent}>
+            <ThemedText style={styles.revealEyebrow}>Session complete</ThemedText>
           <ThemedText style={styles.revealTitle}>
             {sanctuaryReveal.stageChanged
               ? "Your sanctuary changed."
@@ -735,6 +749,9 @@ export default function HomeScreen() {
 
           <View style={styles.revealSceneCard}>
             <View style={styles.revealWindowGlow} />
+            {revealStage >= 2 && <View style={styles.revealHearthAura} />}
+            <View style={styles.revealWindowFrame} />
+            <View style={styles.revealWindowDivider} />
             <View style={styles.revealFloor} />
             <View style={styles.revealRug} />
             <View style={styles.revealChair}>
@@ -747,6 +764,8 @@ export default function HomeScreen() {
             {revealStage >= 1 && (
               <View style={styles.revealIronStove}>
                 <View style={styles.revealIronStovePipe} />
+                <View style={styles.revealIronStoveTop} />
+                <View style={styles.revealIronStoveHandle} />
                 <View style={styles.revealIronStoveWindow}>
                   {revealStage >= 2 ? (
                     <>
@@ -757,6 +776,8 @@ export default function HomeScreen() {
                     <View style={styles.revealFaintEmber} />
                   )}
                 </View>
+                <View style={styles.revealIronStoveLegLeft} />
+                <View style={styles.revealIronStoveLegRight} />
               </View>
             )}
 
@@ -797,18 +818,19 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          <Pressable
-            style={({ pressed }) => [
-              styles.revealContinueButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={dismissSanctuaryReveal}
-          >
-            <ThemedText style={styles.revealContinueButtonText}>
-              Return to sanctuary
-            </ThemedText>
-          </Pressable>
-        </ScrollView>
+            <Pressable
+              style={({ pressed }) => [
+                styles.revealContinueButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={dismissSanctuaryReveal}
+            >
+              <ThemedText style={styles.revealContinueButtonText}>
+                Return to sanctuary
+              </ThemedText>
+            </Pressable>
+          </ScrollView>
+        </Animated.View>
       </ThemedView>
     );
   }
@@ -877,6 +899,7 @@ export default function HomeScreen() {
 
           <View style={styles.sanctuaryScene}>
             <View style={styles.sanctuaryWindowGlow} />
+            {sanctuaryStage >= 2 && <View style={styles.sanctuaryHearthAura} />}
             <View style={styles.sanctuaryWindowFrame} />
             <View style={styles.sanctuaryWindowDivider} />
             <View style={styles.sanctuaryFloor} />
@@ -907,6 +930,8 @@ export default function HomeScreen() {
             {sanctuaryStage >= 1 ? (
               <View style={styles.ironStove}>
                 <View style={styles.ironStovePipe} />
+                <View style={styles.ironStoveTop} />
+                <View style={styles.ironStoveHandle} />
                 <View style={styles.ironStoveWindow}>
                   {sanctuaryStage >= 2 && (
                     <>
@@ -916,9 +941,13 @@ export default function HomeScreen() {
                   )}
                   {sanctuaryStage === 1 && <View style={styles.faintEmber} />}
                 </View>
+                <View style={styles.ironStoveLegLeft} />
+                <View style={styles.ironStoveLegRight} />
               </View>
             ) : (
-              <View style={styles.unlitCorner} />
+              <View style={styles.unlitCorner}>
+                <View style={styles.unlitCornerLine} />
+              </View>
             )}
 
             {sanctuaryStage >= 3 && (
@@ -933,11 +962,15 @@ export default function HomeScreen() {
             )}
 
             {sanctuaryStage >= 4 && (
-              <View style={styles.sanctuaryShelf}>
+              <>
+                <View style={styles.sanctuaryVine} />
+                <View style={styles.sanctuaryHangingLeaf} />
+                <View style={styles.sanctuaryShelf}>
                 <View style={styles.sanctuaryShelfBookOne} />
                 <View style={styles.sanctuaryShelfBookTwo} />
-                <View style={styles.sanctuaryShelfBookThree} />
-              </View>
+                  <View style={styles.sanctuaryShelfBookThree} />
+                </View>
+              </>
             )}
           </View>
 
@@ -1269,11 +1302,11 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   sanctuaryCard: {
-    backgroundColor: "rgba(255,248,237,0.78)",
-    borderRadius: 28,
+    backgroundColor: "rgba(255,248,237,0.86)",
+    borderRadius: 30,
     padding: 18,
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.09)",
+    borderColor: "rgba(23,56,38,0.10)",
     ...softCardShadow,
     zIndex: 2,
   },
@@ -1320,22 +1353,31 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   sanctuaryScene: {
-    height: 230,
-    borderRadius: 26,
-    backgroundColor: "#214B32",
+    height: 238,
+    borderRadius: 28,
+    backgroundColor: "#1F472F",
     overflow: "hidden",
     marginBottom: 16,
     borderWidth: 1,
-    borderColor: "rgba(23,56,38,0.12)",
+    borderColor: "rgba(23,56,38,0.14)",
   },
   sanctuaryWindowGlow: {
     position: "absolute",
-    top: 26,
-    left: 54,
-    right: 54,
-    height: 104,
-    borderRadius: 58,
-    backgroundColor: "rgba(247,195,107,0.68)",
+    top: 24,
+    left: 48,
+    right: 48,
+    height: 112,
+    borderRadius: 62,
+    backgroundColor: "rgba(247,195,107,0.72)",
+  },
+  sanctuaryHearthAura: {
+    position: "absolute",
+    right: 10,
+    bottom: 18,
+    width: 144,
+    height: 112,
+    borderRadius: 56,
+    backgroundColor: "rgba(239,143,62,0.20)",
   },
   sanctuaryWindowFrame: {
     position: "absolute",
@@ -1361,8 +1403,8 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    height: 76,
-    backgroundColor: "rgba(184,144,104,0.78)",
+    height: 82,
+    backgroundColor: "rgba(184,144,104,0.82)",
   },
   sanctuaryRug: {
     position: "absolute",
@@ -1425,40 +1467,71 @@ const styles = StyleSheet.create({
   unlitCorner: {
     position: "absolute",
     right: 38,
-    bottom: 54,
-    width: 62,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: "rgba(23,56,38,0.18)",
+    bottom: 56,
+    width: 64,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: "rgba(23,56,38,0.20)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  unlitCornerLine: {
+    width: 42,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: "rgba(255,248,237,0.18)",
   },
   ironStove: {
     position: "absolute",
-    right: 34,
-    bottom: 52,
-    width: 68,
-    height: 50,
-    borderRadius: 12,
-    backgroundColor: "#343633",
+    right: 32,
+    bottom: 54,
+    width: 72,
+    height: 54,
+    borderRadius: 13,
+    backgroundColor: "#303431",
     borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.12)",
+    borderColor: "rgba(255,248,237,0.14)",
+    shadowColor: "#EF8F3E",
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.22,
+    shadowRadius: 12,
+    elevation: 4,
   },
   ironStovePipe: {
     position: "absolute",
-    top: -58,
-    left: 30,
+    top: -60,
+    left: 32,
     width: 8,
-    height: 62,
+    height: 64,
     borderRadius: 4,
-    backgroundColor: "#343633",
+    backgroundColor: "#303431",
+  },
+  ironStoveTop: {
+    position: "absolute",
+    top: -5,
+    left: 12,
+    right: 12,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#3F4440",
+  },
+  ironStoveHandle: {
+    position: "absolute",
+    top: 8,
+    right: 9,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "rgba(255,248,237,0.22)",
   },
   ironStoveWindow: {
     position: "absolute",
-    top: 11,
+    top: 13,
     left: 14,
     right: 14,
-    height: 25,
-    borderRadius: 6,
-    backgroundColor: "#252420",
+    height: 26,
+    borderRadius: 7,
+    backgroundColor: "#211F1C",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -1471,16 +1544,34 @@ const styles = StyleSheet.create({
   },
   fireGlow: {
     position: "absolute",
-    width: 40,
-    height: 24,
-    borderRadius: 14,
-    backgroundColor: "rgba(239,143,62,0.78)",
+    width: 44,
+    height: 26,
+    borderRadius: 15,
+    backgroundColor: "rgba(239,143,62,0.88)",
   },
   fireIcon: {
     color: "#F7C36B",
     fontSize: 18,
     lineHeight: 22,
     fontWeight: "900",
+  },
+  ironStoveLegLeft: {
+    position: "absolute",
+    left: 12,
+    bottom: -8,
+    width: 8,
+    height: 12,
+    borderRadius: 3,
+    backgroundColor: "#303431",
+  },
+  ironStoveLegRight: {
+    position: "absolute",
+    right: 12,
+    bottom: -8,
+    width: 8,
+    height: 12,
+    borderRadius: 3,
+    backgroundColor: "#303431",
   },
   sanctuaryBookStack: {
     position: "absolute",
@@ -1551,6 +1642,25 @@ const styles = StyleSheet.create({
     height: 28,
     borderRadius: 2,
     backgroundColor: "#C98568",
+  },
+  sanctuaryVine: {
+    position: "absolute",
+    top: 42,
+    left: 34,
+    right: 44,
+    height: 9,
+    borderRadius: 999,
+    backgroundColor: "rgba(116,138,93,0.72)",
+  },
+  sanctuaryHangingLeaf: {
+    position: "absolute",
+    top: 48,
+    right: 54,
+    width: 30,
+    height: 58,
+    borderRadius: 18,
+    backgroundColor: "rgba(116,138,93,0.82)",
+    transform: [{ rotate: "-12deg" }],
   },
   sanctuaryMainCopy: {
     color: "#173826",
@@ -2305,6 +2415,10 @@ const styles = StyleSheet.create({
     paddingBottom: 34,
     overflow: "hidden",
   },
+  revealAnimatedShell: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
   revealContent: {
     flexGrow: 1,
     justifyContent: "center",
@@ -2331,23 +2445,56 @@ const styles = StyleSheet.create({
     marginBottom: 22,
   },
   revealSceneCard: {
-    height: 250,
-    borderRadius: 32,
-    backgroundColor: "#214B32",
+    height: 260,
+    borderRadius: 34,
+    backgroundColor: "#1F472F",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.14)",
+    borderColor: "rgba(255,255,255,0.16)",
     overflow: "hidden",
     marginBottom: 18,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.16,
+    shadowRadius: 22,
+    elevation: 6,
   },
   revealWindowGlow: {
     position: "absolute",
     top: 28,
-    left: 56,
-    right: 56,
-    height: 104,
-    borderRadius: 52,
+    left: 50,
+    right: 50,
+    height: 112,
+    borderRadius: 58,
     backgroundColor: "#F7C36B",
-    opacity: 0.76,
+    opacity: 0.78,
+  },
+  revealHearthAura: {
+    position: "absolute",
+    right: 20,
+    bottom: 22,
+    width: 150,
+    height: 116,
+    borderRadius: 58,
+    backgroundColor: "rgba(239,143,62,0.22)",
+  },
+  revealWindowFrame: {
+    position: "absolute",
+    top: 34,
+    left: 68,
+    right: 68,
+    height: 114,
+    borderRadius: 58,
+    borderWidth: 2,
+    borderColor: "rgba(255,248,237,0.46)",
+  },
+  revealWindowDivider: {
+    position: "absolute",
+    top: 40,
+    alignSelf: "center",
+    width: 2,
+    height: 102,
+    borderRadius: 1,
+    backgroundColor: "rgba(255,248,237,0.42)",
   },
   revealFloor: {
     position: "absolute",
@@ -2414,28 +2561,48 @@ const styles = StyleSheet.create({
   },
   revealIronStove: {
     position: "absolute",
-    right: 46,
-    bottom: 58,
-    width: 64,
-    height: 48,
-    borderRadius: 12,
-    backgroundColor: "#343633",
+    right: 42,
+    bottom: 60,
+    width: 72,
+    height: 54,
+    borderRadius: 13,
+    backgroundColor: "#303431",
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "rgba(255,248,237,0.14)",
   },
   revealIronStovePipe: {
     position: "absolute",
-    top: -52,
+    top: -58,
     width: 8,
-    height: 58,
+    height: 64,
     borderRadius: 4,
-    backgroundColor: "#343633",
+    backgroundColor: "#303431",
+  },
+  revealIronStoveTop: {
+    position: "absolute",
+    top: -5,
+    left: 12,
+    right: 12,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "#3F4440",
+  },
+  revealIronStoveHandle: {
+    position: "absolute",
+    top: 9,
+    right: 9,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "rgba(255,248,237,0.22)",
   },
   revealIronStoveWindow: {
-    width: 38,
-    height: 24,
+    width: 42,
+    height: 26,
     borderRadius: 7,
-    backgroundColor: "#252420",
+    backgroundColor: "#211F1C",
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
@@ -2452,6 +2619,24 @@ const styles = StyleSheet.create({
     color: "#F7C36B",
     fontSize: 20,
     lineHeight: 22,
+  },
+  revealIronStoveLegLeft: {
+    position: "absolute",
+    left: 12,
+    bottom: -8,
+    width: 8,
+    height: 12,
+    borderRadius: 3,
+    backgroundColor: "#303431",
+  },
+  revealIronStoveLegRight: {
+    position: "absolute",
+    right: 12,
+    bottom: -8,
+    width: 8,
+    height: 12,
+    borderRadius: 3,
+    backgroundColor: "#303431",
   },
   revealFaintEmber: {
     width: 14,
