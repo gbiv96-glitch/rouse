@@ -82,6 +82,7 @@ type SanctuaryReveal = {
   title: string;
   subtitle: string;
   sessionMinutes: string;
+  ctaText: string;
 };
 
 const sanctuaryStages: SanctuaryStage[] = [
@@ -123,6 +124,46 @@ function getSanctuaryStage(totalSessions: number, totalMinutes: number) {
   if (totalSessions >= 3 || totalMinutes >= 60) return 2;
   if (totalSessions >= 1) return 1;
   return 0;
+}
+
+function getSanctuaryRevealCopy(stage: number, stageChanged: boolean) {
+  if (!stageChanged) {
+    return {
+      title: "Another quiet moment kept.",
+      subtitle: "The room holds the time you gave it.",
+      ctaText: "Return to sanctuary",
+    };
+  }
+
+  if (stage === 1) {
+    return {
+      title: "The stove has appeared.",
+      subtitle: "Your first session brought warmth into the room.",
+      ctaText: "See what changed",
+    };
+  }
+
+  if (stage === 2) {
+    return {
+      title: "The fire is lit.",
+      subtitle: "Your sanctuary is beginning to hold warmth.",
+      ctaText: "Return to the fire",
+    };
+  }
+
+  if (stage === 3) {
+    return {
+      title: "The room is gathering.",
+      subtitle: "Books, light, and small comforts are finding their place.",
+      ctaText: "Return to the room",
+    };
+  }
+
+  return {
+    title: "Your reading life has taken root.",
+    subtitle: "The room feels alive with the time you’ve given it.",
+    ctaText: "Return to sanctuary",
+  };
 }
 
 function getTodayDateString() {
@@ -194,32 +235,114 @@ export default function HomeScreen() {
   const [sanctuaryReveal, setSanctuaryReveal] =
     useState<SanctuaryReveal | null>(null);
   const [showRitualScreen, setShowRitualScreen] = useState(false);
+  const [ritualCountdownText, setRitualCountdownText] = useState("3");
   const [ritualPrompt] = useState(
     () => ritualPrompts[Math.floor(Math.random() * ritualPrompts.length)],
   );
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ritualOpacity = useRef(new Animated.Value(0)).current;
+  const ritualScale = useRef(new Animated.Value(0.98)).current;
+  const ritualCountdownOpacity = useRef(new Animated.Value(0)).current;
+  const ritualCountdownScale = useRef(new Animated.Value(0.92)).current;
+  const ritualBreath = useRef(new Animated.Value(0)).current;
   const revealOpacity = useRef(new Animated.Value(0)).current;
+  const revealScale = useRef(new Animated.Value(0.96)).current;
+  const revealTranslateY = useRef(new Animated.Value(18)).current;
+  const revealSceneScale = useRef(new Animated.Value(0.98)).current;
 
   useEffect(() => {
     if (!showRitualScreen) return;
 
     ritualOpacity.setValue(0);
+    ritualScale.setValue(0.98);
+    ritualCountdownOpacity.setValue(0);
+    ritualCountdownScale.setValue(0.92);
+    ritualBreath.setValue(0);
+    setRitualCountdownText("3");
+
+    const timers: ReturnType<typeof setTimeout>[] = [];
+
+    const pulseCountdown = () => {
+      ritualCountdownOpacity.setValue(0);
+      ritualCountdownScale.setValue(0.92);
+
+      Animated.parallel([
+        Animated.timing(ritualCountdownOpacity, {
+          toValue: 1,
+          duration: 240,
+          useNativeDriver: true,
+        }),
+        Animated.sequence([
+          Animated.timing(ritualCountdownScale, {
+            toValue: 1.04,
+            duration: 260,
+            useNativeDriver: true,
+          }),
+          Animated.timing(ritualCountdownScale, {
+            toValue: 1,
+            duration: 360,
+            useNativeDriver: true,
+          }),
+        ]),
+      ]).start();
+    };
+
+    const scheduleCountdown = (
+      label: string,
+      delay: number,
+      feedback: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light,
+    ) => {
+      timers.push(
+        setTimeout(() => {
+          setRitualCountdownText(label);
+          pulseCountdown();
+          Haptics.impactAsync(feedback);
+        }, delay),
+      );
+    };
+
+    const breathAnimation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(ritualBreath, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+        Animated.timing(ritualBreath, {
+          toValue: 0,
+          duration: 1200,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
 
     const animation = Animated.sequence([
-      Animated.timing(ritualOpacity, {
-        toValue: 1,
-        duration: 650,
-        useNativeDriver: true,
-      }),
-      Animated.delay(1800),
+      Animated.parallel([
+        Animated.timing(ritualOpacity, {
+          toValue: 1,
+          duration: 620,
+          useNativeDriver: true,
+        }),
+        Animated.timing(ritualScale, {
+          toValue: 1,
+          duration: 850,
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.delay(3150),
       Animated.timing(ritualOpacity, {
         toValue: 0,
-        duration: 600,
+        duration: 620,
         useNativeDriver: true,
       }),
     ]);
+
+    breathAnimation.start();
+    scheduleCountdown("3", 220);
+    scheduleCountdown("2", 1040);
+    scheduleCountdown("1", 1860);
+    scheduleCountdown("Begin", 2700, Haptics.ImpactFeedbackStyle.Medium);
 
     animation.start(({ finished }) => {
       if (finished) {
@@ -229,20 +352,68 @@ export default function HomeScreen() {
 
     return () => {
       animation.stop();
+      breathAnimation.stop();
+      timers.forEach(clearTimeout);
     };
-  }, [ritualOpacity, showRitualScreen]);
+  }, [
+    ritualBreath,
+    ritualCountdownOpacity,
+    ritualCountdownScale,
+    ritualOpacity,
+    ritualScale,
+    showRitualScreen,
+  ]);
 
   useEffect(() => {
     if (!sanctuaryReveal) return;
 
     revealOpacity.setValue(0);
+    revealScale.setValue(0.96);
+    revealTranslateY.setValue(18);
+    revealSceneScale.setValue(0.98);
 
-    Animated.timing(revealOpacity, {
-      toValue: 1,
-      duration: 520,
-      useNativeDriver: true,
-    }).start();
-  }, [revealOpacity, sanctuaryReveal]);
+    if (sanctuaryReveal.stageChanged) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } else {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+
+    Animated.parallel([
+      Animated.timing(revealOpacity, {
+        toValue: 1,
+        duration: 620,
+        useNativeDriver: true,
+      }),
+      Animated.timing(revealScale, {
+        toValue: 1,
+        duration: 720,
+        useNativeDriver: true,
+      }),
+      Animated.timing(revealTranslateY, {
+        toValue: 0,
+        duration: 720,
+        useNativeDriver: true,
+      }),
+      Animated.sequence([
+        Animated.timing(revealSceneScale, {
+          toValue: 1.015,
+          duration: 560,
+          useNativeDriver: true,
+        }),
+        Animated.timing(revealSceneScale, {
+          toValue: 1,
+          duration: 420,
+          useNativeDriver: true,
+        }),
+      ]),
+    ]).start();
+  }, [
+    revealOpacity,
+    revealScale,
+    revealSceneScale,
+    revealTranslateY,
+    sanctuaryReveal,
+  ]);
 
   useEffect(() => {
     const loadSavedData = async () => {
@@ -508,10 +679,12 @@ export default function HomeScreen() {
       updatedTotalCompletedSessions,
       updatedLifetimeMinutes,
     );
-    const updatedSanctuaryStage =
-      sanctuaryStages[updatedSanctuaryStageNumber];
     const didSanctuaryStageChange =
       updatedSanctuaryStageNumber > previousSanctuaryStageNumber;
+    const revealCopy = getSanctuaryRevealCopy(
+      updatedSanctuaryStageNumber,
+      didSanctuaryStageChange,
+    );
 
     setRecentSessions(updatedSessions);
     setTotalCompletedSessions(updatedTotalCompletedSessions);
@@ -527,13 +700,10 @@ export default function HomeScreen() {
     setSanctuaryReveal({
       stage: updatedSanctuaryStageNumber,
       stageChanged: didSanctuaryStageChange,
-      title: didSanctuaryStageChange
-        ? updatedSanctuaryStage.title
-        : "Another quiet moment kept.",
-      subtitle: didSanctuaryStageChange
-        ? updatedSanctuaryStage.subtitle
-        : "Your sanctuary is holding the time you gave it.",
+      title: revealCopy.title,
+      subtitle: revealCopy.subtitle,
       sessionMinutes,
+      ctaText: revealCopy.ctaText,
     });
 
     return sessionMinutes;
@@ -550,8 +720,6 @@ export default function HomeScreen() {
       await AsyncStorage.setItem(CURRENT_BOOK_KEY, trimmedTitle);
     }
 
-    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
     if (trimmedTitle) {
       setSessionMessage(`+${sessionMinutes} min • ${trimmedTitle}`);
     } else {
@@ -567,7 +735,6 @@ export default function HomeScreen() {
 
   const skipBookForSession = async () => {
     const sessionMinutes = await saveSession("Unassigned reading");
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     setSessionMessage(`+${sessionMinutes} minutes added`);
     setShowBookInput(false);
@@ -597,6 +764,14 @@ export default function HomeScreen() {
   );
   const currentSanctuaryStage = sanctuaryStages[sanctuaryStageNumber];
   const sanctuaryStage = currentSanctuaryStage.stage;
+  const ritualBreathScale = ritualBreath.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 1.08],
+  });
+  const ritualBreathOpacity = ritualBreath.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.16, 0.34],
+  });
 
   if (!isLoaded) {
     return (
@@ -640,7 +815,10 @@ export default function HomeScreen() {
         {showRitualScreen && (
           <Animated.View
             pointerEvents="none"
-            style={[styles.ritualOverlay, { opacity: ritualOpacity }]}
+            style={[
+              styles.ritualOverlay,
+              { opacity: ritualOpacity, transform: [{ scale: ritualScale }] },
+            ]}
           >
             <View style={styles.sessionGlowOne} />
             <View style={styles.sessionGlowTwo} />
@@ -651,7 +829,44 @@ export default function HomeScreen() {
                 Your reading session has begun
               </ThemedText>
               <ThemedText style={styles.sessionSubtitle}>
-                Settle in.{"\n"}We&apos;ve got time.
+                Settle in. We’ll keep time.
+              </ThemedText>
+
+              <View style={styles.ritualCountdownArea}>
+                <Animated.View
+                  style={[
+                    styles.ritualBreathRing,
+                    {
+                      opacity: ritualBreathOpacity,
+                      transform: [{ scale: ritualBreathScale }],
+                    },
+                  ]}
+                />
+                <Animated.View
+                  style={[
+                    styles.ritualCountdownBubble,
+                    {
+                      opacity: ritualCountdownOpacity,
+                      transform: [{ scale: ritualCountdownScale }],
+                    },
+                  ]}
+                >
+                  <ThemedText
+                    style={[
+                      styles.ritualCountdownText,
+                      ritualCountdownText.length > 1 &&
+                        styles.ritualCountdownTextLong,
+                    ]}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                  >
+                    {ritualCountdownText}
+                  </ThemedText>
+                </Animated.View>
+              </View>
+
+              <ThemedText style={styles.ritualInstruction}>
+                Place the phone down.{"\n"}Let the room hold the time.
               </ThemedText>
 
               <View style={styles.focusPill}>
@@ -738,7 +953,18 @@ export default function HomeScreen() {
         <View style={styles.sessionGlowOne} />
         <View style={styles.sessionGlowTwo} />
 
-        <Animated.View style={[styles.revealAnimatedShell, { opacity: revealOpacity }]}>
+        <Animated.View
+          style={[
+            styles.revealAnimatedShell,
+            {
+              opacity: revealOpacity,
+              transform: [
+                { translateY: revealTranslateY },
+                { scale: revealScale },
+              ],
+            },
+          ]}
+        >
           <ScrollView contentContainerStyle={styles.revealContent}>
             <ThemedText style={styles.revealEyebrow}>Session complete</ThemedText>
           <ThemedText style={styles.revealTitle}>
@@ -747,7 +973,12 @@ export default function HomeScreen() {
               : "Another quiet moment kept."}
           </ThemedText>
 
-          <View style={styles.revealSceneCard}>
+          <Animated.View
+            style={[
+              styles.revealSceneCard,
+              { transform: [{ scale: revealSceneScale }] },
+            ]}
+          >
             <View style={styles.revealWindowGlow} />
             {revealStage >= 2 && <View style={styles.revealHearthAura} />}
             <View style={styles.revealWindowFrame} />
@@ -799,7 +1030,7 @@ export default function HomeScreen() {
                 <View style={styles.revealShelfBookThree} />
               </View>
             )}
-          </View>
+          </Animated.View>
 
           <View style={styles.revealCopyCard}>
             <ThemedText style={styles.revealStageLabel}>
@@ -826,7 +1057,7 @@ export default function HomeScreen() {
               onPress={dismissSanctuaryReveal}
             >
               <ThemedText style={styles.revealContinueButtonText}>
-                Return to sanctuary
+                {sanctuaryReveal.ctaText}
               </ThemedText>
             </Pressable>
           </ScrollView>
@@ -873,13 +1104,6 @@ export default function HomeScreen() {
             </ThemedText>
           </View>
         </ThemedView>
-
-        <View style={styles.ritualCopyBlock}>
-          <ThemedText style={styles.ritualLine}>{ritualPrompt}</ThemedText>
-          <View style={styles.ritualDividerRow}>
-            <View style={styles.ritualDivider} />
-          </View>
-        </View>
 
         <ThemedView style={styles.sanctuaryCard}>
           <View style={styles.sanctuaryHeaderRow}>
@@ -1271,7 +1495,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     justifyContent: "space-between",
     backgroundColor: "transparent",
-    marginBottom: 10,
+    marginBottom: 28,
     zIndex: 2,
   },
   appName: {
@@ -2301,6 +2525,54 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     textAlign: "center",
     marginTop: 18,
+  },
+  ritualCountdownArea: {
+    width: 176,
+    height: 156,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 36,
+  },
+  ritualBreathRing: {
+    position: "absolute",
+    width: 150,
+    height: 150,
+    borderRadius: 75,
+    backgroundColor: "rgba(244,197,126,0.22)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
+  },
+  ritualCountdownBubble: {
+    width: 136,
+    height: 104,
+    borderRadius: 52,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+  },
+  ritualCountdownText: {
+    color: "#FFF8EE",
+    fontSize: 38,
+    lineHeight: 44,
+    fontWeight: "900",
+    letterSpacing: -0.8,
+    textAlign: "center",
+    paddingHorizontal: 8,
+  },
+  ritualCountdownTextLong: {
+    fontSize: 30,
+    lineHeight: 36,
+    letterSpacing: -0.6,
+  },
+  ritualInstruction: {
+    color: "rgba(255,255,255,0.58)",
+    fontSize: 14,
+    lineHeight: 22,
+    fontWeight: "700",
+    textAlign: "center",
+    marginTop: 20,
   },
   focusPill: {
     backgroundColor: "rgba(255,255,255,0.12)",
