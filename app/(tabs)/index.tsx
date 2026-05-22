@@ -67,6 +67,7 @@ type ReadingSession = {
   minutes: string;
   createdAt?: string;
   date?: string;
+  source?: "timed" | "logged";
 };
 
 type SanctuaryStage = {
@@ -230,6 +231,10 @@ export default function HomeScreen() {
   const [bookTitle, setBookTitle] = useState("");
   const [currentBookTitle, setCurrentBookTitle] = useState("");
   const [showBookInput, setShowBookInput] = useState(false);
+  const [showManualLogInput, setShowManualLogInput] = useState(false);
+  const [manualLogMinutes, setManualLogMinutes] = useState("30");
+  const [manualLogBookTitle, setManualLogBookTitle] = useState("");
+  const [manualLogError, setManualLogError] = useState<string | null>(null);
   const [recentSessions, setRecentSessions] = useState<ReadingSession[]>([]);
   const [totalCompletedSessions, setTotalCompletedSessions] = useState(0);
   const [sanctuaryReveal, setSanctuaryReveal] =
@@ -614,6 +619,7 @@ export default function HomeScreen() {
       setSanctuaryReveal(null);
       setBookTitle(currentBookTitle);
       setShowBookInput(false);
+      setShowManualLogInput(false);
       setShowRitualScreen(true);
       setIsReading(true);
 
@@ -656,11 +662,12 @@ export default function HomeScreen() {
     const sessionSeconds = pendingSessionSeconds;
     const sessionMinutes = (sessionSeconds / 60).toFixed(1);
 
-    const newSession = {
+    const newSession: ReadingSession = {
       id: Date.now().toString(),
       title,
       minutes: sessionMinutes,
       createdAt: new Date().toISOString(),
+      source: "timed",
     };
 
     const updatedSessions = [newSession, ...recentSessions].slice(0, 5);
@@ -742,6 +749,106 @@ export default function HomeScreen() {
     setTimeout(() => {
       setSessionMessage(null);
     }, 3000);
+  };
+
+  const openManualLog = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setManualLogMinutes("30");
+    setManualLogBookTitle(currentBookTitle);
+    setManualLogError(null);
+    setSanctuaryReveal(null);
+    setSessionMessage(null);
+    setShowManualLogInput(true);
+  };
+
+  const cancelManualLog = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setShowManualLogInput(false);
+    setManualLogError(null);
+  };
+
+  const saveManualReadingLog = async () => {
+    const normalizedMinutes = manualLogMinutes.replace(",", ".").trim();
+    const minutesNumber = Number(normalizedMinutes);
+
+    if (!Number.isFinite(minutesNumber) || minutesNumber <= 0) {
+      setManualLogError("Enter a reading time greater than 0 minutes.");
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      return;
+    }
+
+    const cappedMinutes = Math.min(minutesNumber, 720);
+    const manualSessionSeconds = Math.round(cappedMinutes * 60);
+    const sessionMinutes = (manualSessionSeconds / 60).toFixed(1);
+    const trimmedTitle = manualLogBookTitle.trim();
+    const titleToSave = trimmedTitle || "Logged reading";
+    const previousLifetimeSeconds = lifetimeSeconds;
+    const updatedTodaySeconds = seconds + manualSessionSeconds;
+    const updatedLifetimeSeconds = lifetimeSeconds + manualSessionSeconds;
+
+    await updateStreakIfNeeded();
+
+    const newSession: ReadingSession = {
+      id: Date.now().toString(),
+      title: titleToSave,
+      minutes: sessionMinutes,
+      createdAt: new Date().toISOString(),
+      source: "logged",
+    };
+
+    const updatedSessions = [newSession, ...recentSessions].slice(0, 5);
+    const updatedTotalCompletedSessions = totalCompletedSessions + 1;
+    const previousSanctuaryStageNumber = getSanctuaryStage(
+      totalCompletedSessions,
+      previousLifetimeSeconds / 60,
+    );
+    const updatedSanctuaryStageNumber = getSanctuaryStage(
+      updatedTotalCompletedSessions,
+      updatedLifetimeSeconds / 60,
+    );
+    const didSanctuaryStageChange =
+      updatedSanctuaryStageNumber > previousSanctuaryStageNumber;
+    const revealCopy = getSanctuaryRevealCopy(
+      updatedSanctuaryStageNumber,
+      didSanctuaryStageChange,
+    );
+
+    setSeconds(updatedTodaySeconds);
+    setLifetimeSeconds(updatedLifetimeSeconds);
+    setRecentSessions(updatedSessions);
+    setTotalCompletedSessions(updatedTotalCompletedSessions);
+    setShowManualLogInput(false);
+    setManualLogError(null);
+
+    if (trimmedTitle) {
+      setCurrentBookTitle(trimmedTitle);
+      await AsyncStorage.setItem(CURRENT_BOOK_KEY, trimmedTitle);
+    }
+
+    await AsyncStorage.multiSet([
+      [SECONDS_KEY, String(updatedTodaySeconds)],
+      [LIFETIME_SECONDS_KEY, String(updatedLifetimeSeconds)],
+      [SESSIONS_KEY, JSON.stringify(updatedSessions)],
+      [
+        TOTAL_COMPLETED_SESSIONS_KEY,
+        String(updatedTotalCompletedSessions),
+      ],
+    ]);
+
+    setSanctuaryReveal({
+      stage: updatedSanctuaryStageNumber,
+      stageChanged: didSanctuaryStageChange,
+      title: revealCopy.title,
+      subtitle: revealCopy.subtitle,
+      sessionMinutes,
+      ctaText: revealCopy.ctaText,
+    });
+
+    setSessionMessage(`+${sessionMinutes} min • logged`);
+
+    setTimeout(() => {
+      setSessionMessage(null);
+    }, 3500);
   };
 
   const dismissSanctuaryReveal = async () => {
@@ -937,6 +1044,117 @@ export default function HomeScreen() {
             >
               <ThemedText style={styles.closeSaveButtonText}>
                 Save book
+              </ThemedText>
+            </Pressable>
+          </View>
+        </ScrollView>
+      </ThemedView>
+    );
+  }
+
+  if (showManualLogInput) {
+    const presetMinutes = ["10", "20", "30", "45", "60"];
+
+    return (
+      <ThemedView style={styles.closeSessionScreen}>
+        <View style={styles.sessionGlowOne} />
+        <View style={styles.sessionGlowTwo} />
+
+        <ScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.closeSessionContent}
+        >
+          <ThemedText style={styles.closeEyebrow}>Manual log</ThemedText>
+          <ThemedText style={styles.closeTitle}>Keep the record honest.</ThemedText>
+          <ThemedText style={styles.closeMinutes}>
+            Timed sessions are the ritual. Logged sessions keep your sanctuary in sync.
+          </ThemedText>
+
+          <View style={styles.manualPresetRow}>
+            {presetMinutes.map((minutes) => {
+              const isSelected = manualLogMinutes === minutes;
+
+              return (
+                <Pressable
+                  key={minutes}
+                  style={({ pressed }) => [
+                    styles.manualPresetChip,
+                    isSelected && styles.manualPresetChipSelected,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={() => {
+                    setManualLogMinutes(minutes);
+                    setManualLogError(null);
+                  }}
+                >
+                  <ThemedText
+                    style={[
+                      styles.manualPresetChipText,
+                      isSelected && styles.manualPresetChipTextSelected,
+                    ]}
+                  >
+                    {minutes}m
+                  </ThemedText>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          <TextInput
+            placeholder="Minutes read"
+            placeholderTextColor="rgba(255,255,255,0.45)"
+            value={manualLogMinutes}
+            onChangeText={(value) => {
+              setManualLogMinutes(value);
+              setManualLogError(null);
+            }}
+            style={styles.closeBookInput}
+            keyboardType="decimal-pad"
+            returnKeyType="next"
+          />
+
+          <TextInput
+            placeholder="Book title (optional)"
+            placeholderTextColor="rgba(255,255,255,0.45)"
+            value={manualLogBookTitle}
+            onChangeText={setManualLogBookTitle}
+            style={[styles.closeBookInput, styles.manualBookInput]}
+            returnKeyType="done"
+            onSubmitEditing={saveManualReadingLog}
+          />
+
+          {manualLogError && (
+            <ThemedText style={styles.manualLogError}>
+              {manualLogError}
+            </ThemedText>
+          )}
+
+          <ThemedText style={styles.closeHelperText}>
+            Manual logs count toward your reading time and sanctuary progression, but they’ll be marked as logged sessions in your history.
+          </ThemedText>
+
+          <View style={styles.closeButtonRow}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.closeSecondaryButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={cancelManualLog}
+            >
+              <ThemedText style={styles.closeSecondaryButtonText}>
+                Cancel
+              </ThemedText>
+            </Pressable>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.closeSaveButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={saveManualReadingLog}
+            >
+              <ThemedText style={styles.closeSaveButtonText}>
+                Log reading
               </ThemedText>
             </Pressable>
           </View>
@@ -1232,6 +1450,21 @@ export default function HomeScreen() {
           </View>
         </Pressable>
 
+        <Pressable
+          style={({ pressed }) => [
+            styles.manualLogButton,
+            pressed && styles.buttonPressed,
+          ]}
+          onPress={openManualLog}
+        >
+          <ThemedText style={styles.manualLogButtonText}>
+            Log reading manually
+          </ThemedText>
+          <ThemedText style={styles.manualLogButtonSubtext}>
+            For sessions you already completed
+          </ThemedText>
+        </Pressable>
+
         <ThemedView style={styles.todayCard}>
           <View style={styles.todayLeftColumn}>
             <ThemedText style={styles.todayLabel}>Today</ThemedText>
@@ -1307,7 +1540,7 @@ export default function HomeScreen() {
                     {session.title}
                   </ThemedText>
                   <ThemedText style={styles.sessionDate}>
-                    {formatSessionTimestamp(session.createdAt, session.date)}
+                    {session.source === "logged" ? "Logged" : "Timed"} • {formatSessionTimestamp(session.createdAt, session.date)}
                   </ThemedText>
                 </View>
 
@@ -1366,14 +1599,15 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
+    paddingBottom: 120,
   },
   container: {
     flex: 1,
     position: "relative",
     paddingHorizontal: 24,
-    paddingTop: 66,
+    paddingTop: 52,
     paddingBottom: 40,
-    gap: 16,
+    gap: 12,
     backgroundColor: colors.background,
     overflow: "hidden",
   },
@@ -1495,12 +1729,12 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     justifyContent: "space-between",
     backgroundColor: "transparent",
-    marginBottom: 28,
+    marginBottom: 18,
     zIndex: 2,
   },
   appName: {
-    fontSize: 42,
-    lineHeight: 50,
+    fontSize: 40,
+    lineHeight: 48,
     fontWeight: "900",
     color: colors.text,
     letterSpacing: -1.4,
@@ -1509,7 +1743,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 23,
     color: colors.mutedText,
-    marginTop: 6,
+    marginTop: 4,
   },
   streakPill: {
     backgroundColor: "rgba(255,255,255,0.68)",
@@ -1528,7 +1762,7 @@ const styles = StyleSheet.create({
   sanctuaryCard: {
     backgroundColor: "rgba(255,248,237,0.86)",
     borderRadius: 30,
-    padding: 18,
+    padding: 16,
     borderWidth: 1,
     borderColor: "rgba(23,56,38,0.10)",
     ...softCardShadow,
@@ -1539,7 +1773,7 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     justifyContent: "space-between",
     backgroundColor: "transparent",
-    marginBottom: 14,
+    marginBottom: 10,
   },
   sanctuaryHeaderCopy: {
     flex: 1,
@@ -1557,8 +1791,8 @@ const styles = StyleSheet.create({
   },
   sanctuaryTitle: {
     color: "#173826",
-    fontSize: 24,
-    lineHeight: 30,
+    fontSize: 23,
+    lineHeight: 28,
     fontWeight: "900",
     letterSpacing: -0.45,
   },
@@ -1577,11 +1811,11 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   sanctuaryScene: {
-    height: 238,
-    borderRadius: 28,
+    height: 210,
+    borderRadius: 26,
     backgroundColor: "#1F472F",
     overflow: "hidden",
-    marginBottom: 16,
+    marginBottom: 12,
     borderWidth: 1,
     borderColor: "rgba(23,56,38,0.14)",
   },
@@ -1888,8 +2122,8 @@ const styles = StyleSheet.create({
   },
   sanctuaryMainCopy: {
     color: "#173826",
-    fontSize: 18,
-    lineHeight: 24,
+    fontSize: 17,
+    lineHeight: 23,
     fontWeight: "900",
     letterSpacing: -0.2,
   },
@@ -1901,10 +2135,10 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   startHero: {
-    minHeight: 80,
+    minHeight: 76,
     backgroundColor: "#345F52",
     borderRadius: 23,
-    paddingHorizontal: 21,
+    paddingHorizontal: 20,
     justifyContent: "center",
     shadowColor: "#315F52",
     shadowOffset: { width: 0, height: 8 },
@@ -1945,6 +2179,31 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontWeight: "600",
     flexShrink: 1,
+  },
+  manualLogButton: {
+    backgroundColor: "rgba(255,255,255,0.58)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.09)",
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    zIndex: 3,
+    ...softCardShadow,
+  },
+  manualLogButtonText: {
+    color: colors.accentDark,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  manualLogButtonSubtext: {
+    color: "rgba(107,114,128,0.72)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "650",
+    textAlign: "center",
+    marginTop: 2,
   },
   todayCard: {
     backgroundColor: "rgba(255,255,255,0.54)",
@@ -2505,8 +2764,8 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   sessionBookIcon: {
-    fontSize: 42,
-    lineHeight: 50,
+    fontSize: 40,
+    lineHeight: 48,
     marginBottom: 22,
   },
   sessionTitle: {
@@ -2636,6 +2895,45 @@ const styles = StyleSheet.create({
     fontSize: 20,
     color: "#FFFFFF",
     fontWeight: "600",
+  },
+  manualBookInput: {
+    marginTop: 12,
+  },
+  manualPresetRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+    backgroundColor: "transparent",
+    marginTop: 24,
+    marginBottom: 14,
+  },
+  manualPresetChip: {
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
+    borderRadius: 999,
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+  },
+  manualPresetChipSelected: {
+    backgroundColor: "rgba(255,255,255,0.9)",
+    borderColor: "rgba(255,255,255,0.9)",
+  },
+  manualPresetChipText: {
+    color: "rgba(255,255,255,0.75)",
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: "900",
+  },
+  manualPresetChipTextSelected: {
+    color: colors.sessionBackground,
+  },
+  manualLogError: {
+    color: "#FFD9C7",
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "800",
+    marginTop: 12,
   },
   closeHelperText: {
     color: "rgba(255,255,255,0.58)",
