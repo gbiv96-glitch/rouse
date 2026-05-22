@@ -21,6 +21,7 @@ const STREAK_KEY = "currentStreak";
 const LIFETIME_SECONDS_KEY = "lifetimeReadingSeconds";
 const TOTAL_DAYS_READ_KEY = "totalDaysRead";
 const SESSIONS_KEY = "readingSessions";
+const TOTAL_COMPLETED_SESSIONS_KEY = "totalCompletedSessions";
 const CURRENT_BOOK_KEY = "currentBookTitle";
 const ACTIVE_SESSION_START_KEY = "activeReadingSessionStartTime";
 const ACTIVE_SESSION_TODAY_START_SECONDS_KEY =
@@ -67,6 +68,62 @@ type ReadingSession = {
   createdAt?: string;
   date?: string;
 };
+
+type SanctuaryStage = {
+  stage: number;
+  title: string;
+  subtitle: string;
+  shortLabel: string;
+};
+
+type SanctuaryReveal = {
+  stage: number;
+  stageChanged: boolean;
+  title: string;
+  subtitle: string;
+  sessionMinutes: string;
+};
+
+const sanctuaryStages: SanctuaryStage[] = [
+  {
+    stage: 0,
+    title: "A quiet room waits.",
+    subtitle: "Begin a session to bring warmth to your sanctuary.",
+    shortLabel: "The Quiet Room",
+  },
+  {
+    stage: 1,
+    title: "The room feels warmer now.",
+    subtitle: "Your first session has changed the space.",
+    shortLabel: "The Stove Appears",
+  },
+  {
+    stage: 2,
+    title: "The fire is lit.",
+    subtitle: "Your sanctuary is beginning to hold warmth.",
+    shortLabel: "The Fire Is Lit",
+  },
+  {
+    stage: 3,
+    title: "This place is becoming yours.",
+    subtitle: "Books, light, and quiet are gathering here.",
+    shortLabel: "The Room Gathers",
+  },
+  {
+    stage: 4,
+    title: "Your reading life has taken root.",
+    subtitle: "The room is alive with the time you’ve given it.",
+    shortLabel: "The Sanctuary Takes Root",
+  },
+];
+
+function getSanctuaryStage(totalSessions: number, totalMinutes: number) {
+  if (totalSessions >= 10 || totalMinutes >= 360) return 4;
+  if (totalSessions >= 6 || totalMinutes >= 180) return 3;
+  if (totalSessions >= 3 || totalMinutes >= 60) return 2;
+  if (totalSessions >= 1) return 1;
+  return 0;
+}
 
 function getTodayDateString() {
   return new Date().toISOString().split("T")[0];
@@ -133,6 +190,9 @@ export default function HomeScreen() {
   const [currentBookTitle, setCurrentBookTitle] = useState("");
   const [showBookInput, setShowBookInput] = useState(false);
   const [recentSessions, setRecentSessions] = useState<ReadingSession[]>([]);
+  const [totalCompletedSessions, setTotalCompletedSessions] = useState(0);
+  const [sanctuaryReveal, setSanctuaryReveal] =
+    useState<SanctuaryReveal | null>(null);
   const [showRitualScreen, setShowRitualScreen] = useState(false);
   const [ritualPrompt] = useState(
     () => ritualPrompts[Math.floor(Math.random() * ritualPrompts.length)],
@@ -182,6 +242,9 @@ export default function HomeScreen() {
         const savedTotalDaysRead =
           await AsyncStorage.getItem(TOTAL_DAYS_READ_KEY);
         const savedSessions = await AsyncStorage.getItem(SESSIONS_KEY);
+        const savedTotalCompletedSessions = await AsyncStorage.getItem(
+          TOTAL_COMPLETED_SESSIONS_KEY,
+        );
         const savedCurrentBook = await AsyncStorage.getItem(CURRENT_BOOK_KEY);
         const savedActiveSessionStartTime = await AsyncStorage.getItem(
           ACTIVE_SESSION_START_KEY,
@@ -206,8 +269,18 @@ export default function HomeScreen() {
         setLifetimeSeconds(savedLifetimeTotalSeconds);
         if (savedTotalDaysRead !== null)
           setTotalDaysRead(Number(savedTotalDaysRead));
-        if (savedSessions !== null)
-          setRecentSessions(JSON.parse(savedSessions));
+        if (savedSessions !== null) {
+          const parsedSessions = JSON.parse(savedSessions);
+          setRecentSessions(parsedSessions);
+
+          if (savedTotalCompletedSessions !== null) {
+            setTotalCompletedSessions(Number(savedTotalCompletedSessions));
+          } else {
+            setTotalCompletedSessions(parsedSessions.length);
+          }
+        } else if (savedTotalCompletedSessions !== null) {
+          setTotalCompletedSessions(Number(savedTotalCompletedSessions));
+        }
 
         if (savedActiveSessionStartTime !== null) {
           const restoredStartTime = Number(savedActiveSessionStartTime);
@@ -354,6 +427,7 @@ export default function HomeScreen() {
       setActiveSessionStartTime(now);
       setPendingSessionSeconds(0);
       setSessionMessage(null);
+      setSanctuaryReveal(null);
       setBookTitle(currentBookTitle);
       setShowBookInput(false);
       setShowRitualScreen(true);
@@ -407,8 +481,47 @@ export default function HomeScreen() {
 
     const updatedSessions = [newSession, ...recentSessions].slice(0, 5);
 
+    const updatedTotalCompletedSessions = totalCompletedSessions + 1;
+    const previousLifetimeMinutes = Math.max(
+      0,
+      (lifetimeSeconds - sessionSeconds) / 60,
+    );
+    const updatedLifetimeMinutes = lifetimeSeconds / 60;
+    const previousSanctuaryStageNumber = getSanctuaryStage(
+      totalCompletedSessions,
+      previousLifetimeMinutes,
+    );
+    const updatedSanctuaryStageNumber = getSanctuaryStage(
+      updatedTotalCompletedSessions,
+      updatedLifetimeMinutes,
+    );
+    const updatedSanctuaryStage =
+      sanctuaryStages[updatedSanctuaryStageNumber];
+    const didSanctuaryStageChange =
+      updatedSanctuaryStageNumber > previousSanctuaryStageNumber;
+
     setRecentSessions(updatedSessions);
-    await AsyncStorage.setItem(SESSIONS_KEY, JSON.stringify(updatedSessions));
+    setTotalCompletedSessions(updatedTotalCompletedSessions);
+
+    await AsyncStorage.multiSet([
+      [SESSIONS_KEY, JSON.stringify(updatedSessions)],
+      [
+        TOTAL_COMPLETED_SESSIONS_KEY,
+        String(updatedTotalCompletedSessions),
+      ],
+    ]);
+
+    setSanctuaryReveal({
+      stage: updatedSanctuaryStageNumber,
+      stageChanged: didSanctuaryStageChange,
+      title: didSanctuaryStageChange
+        ? updatedSanctuaryStage.title
+        : "Another quiet moment kept.",
+      subtitle: didSanctuaryStageChange
+        ? updatedSanctuaryStage.subtitle
+        : "Your sanctuary is holding the time you gave it.",
+      sessionMinutes,
+    });
 
     return sessionMinutes;
   };
@@ -440,14 +553,20 @@ export default function HomeScreen() {
   };
 
   const skipBookForSession = async () => {
-    await saveSession("Unassigned reading");
+    const sessionMinutes = await saveSession("Unassigned reading");
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
+    setSessionMessage(`+${sessionMinutes} minutes added`);
     setShowBookInput(false);
 
     setTimeout(() => {
       setSessionMessage(null);
     }, 3000);
+  };
+
+  const dismissSanctuaryReveal = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setSanctuaryReveal(null);
   };
 
   const formattedTime = formatTime(seconds);
@@ -458,6 +577,13 @@ export default function HomeScreen() {
   const visibleSessions = recentSessions.slice(0, 3);
   const encouragement =
     encouragementMessages[totalDaysRead % encouragementMessages.length];
+
+  const sanctuaryStageNumber = getSanctuaryStage(
+    totalCompletedSessions,
+    lifetimeMinutes,
+  );
+  const currentSanctuaryStage = sanctuaryStages[sanctuaryStageNumber];
+  const sanctuaryStage = currentSanctuaryStage.stage;
 
   if (!isLoaded) {
     return (
@@ -591,6 +717,102 @@ export default function HomeScreen() {
     );
   }
 
+  if (sanctuaryReveal) {
+    const revealStage = sanctuaryReveal.stage;
+
+    return (
+      <ThemedView style={styles.revealScreen}>
+        <View style={styles.sessionGlowOne} />
+        <View style={styles.sessionGlowTwo} />
+
+        <ScrollView contentContainerStyle={styles.revealContent}>
+          <ThemedText style={styles.revealEyebrow}>Session complete</ThemedText>
+          <ThemedText style={styles.revealTitle}>
+            {sanctuaryReveal.stageChanged
+              ? "Your sanctuary changed."
+              : "Another quiet moment kept."}
+          </ThemedText>
+
+          <View style={styles.revealSceneCard}>
+            <View style={styles.revealWindowGlow} />
+            <View style={styles.revealFloor} />
+            <View style={styles.revealRug} />
+            <View style={styles.revealChair}>
+              {revealStage >= 3 && <View style={styles.revealBlanket} />}
+            </View>
+            <View style={styles.revealPlantPot} />
+            <View style={[styles.revealLeaf, styles.revealLeafOne]} />
+            <View style={[styles.revealLeaf, styles.revealLeafTwo]} />
+
+            {revealStage >= 1 && (
+              <View style={styles.revealIronStove}>
+                <View style={styles.revealIronStovePipe} />
+                <View style={styles.revealIronStoveWindow}>
+                  {revealStage >= 2 ? (
+                    <>
+                      <View style={styles.revealFireGlow} />
+                      <ThemedText style={styles.revealFireIcon}>●</ThemedText>
+                    </>
+                  ) : (
+                    <View style={styles.revealFaintEmber} />
+                  )}
+                </View>
+              </View>
+            )}
+
+            {revealStage >= 3 && (
+              <>
+                <View style={styles.revealBookStack}>
+                  <View style={styles.revealBookOne} />
+                  <View style={styles.revealBookTwo} />
+                  <View style={styles.revealBookThree} />
+                </View>
+                <View style={styles.revealMug} />
+              </>
+            )}
+
+            {revealStage >= 4 && (
+              <View style={styles.revealShelf}>
+                <View style={styles.revealShelfBookOne} />
+                <View style={styles.revealShelfBookTwo} />
+                <View style={styles.revealShelfBookThree} />
+              </View>
+            )}
+          </View>
+
+          <View style={styles.revealCopyCard}>
+            <ThemedText style={styles.revealStageLabel}>
+              {sanctuaryStages[revealStage].shortLabel}
+            </ThemedText>
+            <ThemedText style={styles.revealMainCopy}>
+              {sanctuaryReveal.title}
+            </ThemedText>
+            <ThemedText style={styles.revealSubCopy}>
+              {sanctuaryReveal.subtitle}
+            </ThemedText>
+            <View style={styles.revealMinutesPill}>
+              <ThemedText style={styles.revealMinutesText}>
+                +{sanctuaryReveal.sessionMinutes} minutes read
+              </ThemedText>
+            </View>
+          </View>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.revealContinueButton,
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={dismissSanctuaryReveal}
+          >
+            <ThemedText style={styles.revealContinueButtonText}>
+              Return to sanctuary
+            </ThemedText>
+          </Pressable>
+        </ScrollView>
+      </ThemedView>
+    );
+  }
+
   return (
     <ScrollView
       style={styles.screen}
@@ -636,6 +858,96 @@ export default function HomeScreen() {
             <View style={styles.ritualDivider} />
           </View>
         </View>
+
+        <ThemedView style={styles.sanctuaryCard}>
+          <View style={styles.sanctuaryHeaderRow}>
+            <View style={styles.sanctuaryHeaderCopy}>
+              <ThemedText style={styles.sanctuaryEyebrow}>Sanctuary</ThemedText>
+              <ThemedText style={styles.sanctuaryTitle}>
+                {currentSanctuaryStage.shortLabel}
+              </ThemedText>
+            </View>
+
+            <View style={styles.sanctuaryStagePill}>
+              <ThemedText style={styles.sanctuaryStagePillText}>
+                {sanctuaryStage + 1}/5
+              </ThemedText>
+            </View>
+          </View>
+
+          <View style={styles.sanctuaryScene}>
+            <View style={styles.sanctuaryWindowGlow} />
+            <View style={styles.sanctuaryWindowFrame} />
+            <View style={styles.sanctuaryWindowDivider} />
+            <View style={styles.sanctuaryFloor} />
+            <View style={styles.sanctuaryRug} />
+
+            <View style={styles.sanctuaryChair}>
+              {sanctuaryStage >= 3 && (
+                <View style={styles.sanctuaryBlanket} />
+              )}
+            </View>
+
+            <View style={styles.sanctuaryPlantPot} />
+            <View
+              style={[
+                styles.sanctuaryLeaf,
+                styles.sanctuaryLeafOne,
+                sanctuaryStage >= 4 && styles.sanctuaryLeafGrown,
+              ]}
+            />
+            <View
+              style={[
+                styles.sanctuaryLeaf,
+                styles.sanctuaryLeafTwo,
+                sanctuaryStage >= 4 && styles.sanctuaryLeafGrown,
+              ]}
+            />
+
+            {sanctuaryStage >= 1 ? (
+              <View style={styles.ironStove}>
+                <View style={styles.ironStovePipe} />
+                <View style={styles.ironStoveWindow}>
+                  {sanctuaryStage >= 2 && (
+                    <>
+                      <View style={styles.fireGlow} />
+                      <ThemedText style={styles.fireIcon}>●</ThemedText>
+                    </>
+                  )}
+                  {sanctuaryStage === 1 && <View style={styles.faintEmber} />}
+                </View>
+              </View>
+            ) : (
+              <View style={styles.unlitCorner} />
+            )}
+
+            {sanctuaryStage >= 3 && (
+              <>
+                <View style={styles.sanctuaryBookStack}>
+                  <View style={styles.sanctuaryBookOne} />
+                  <View style={styles.sanctuaryBookTwo} />
+                  <View style={styles.sanctuaryBookThree} />
+                </View>
+                <View style={styles.sanctuaryMug} />
+              </>
+            )}
+
+            {sanctuaryStage >= 4 && (
+              <View style={styles.sanctuaryShelf}>
+                <View style={styles.sanctuaryShelfBookOne} />
+                <View style={styles.sanctuaryShelfBookTwo} />
+                <View style={styles.sanctuaryShelfBookThree} />
+              </View>
+            )}
+          </View>
+
+          <ThemedText style={styles.sanctuaryMainCopy}>
+            {currentSanctuaryStage.title}
+          </ThemedText>
+          <ThemedText style={styles.sanctuarySubCopy}>
+            {currentSanctuaryStage.subtitle}
+          </ThemedText>
+        </ThemedView>
 
         <Pressable
           style={({ pressed }) => [
@@ -955,6 +1267,304 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: colors.text,
     fontWeight: "800",
+  },
+  sanctuaryCard: {
+    backgroundColor: "rgba(255,248,237,0.78)",
+    borderRadius: 28,
+    padding: 18,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.09)",
+    ...softCardShadow,
+    zIndex: 2,
+  },
+  sanctuaryHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    backgroundColor: "transparent",
+    marginBottom: 14,
+  },
+  sanctuaryHeaderCopy: {
+    flex: 1,
+    backgroundColor: "transparent",
+    paddingRight: 12,
+  },
+  sanctuaryEyebrow: {
+    color: "rgba(47,93,80,0.62)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "900",
+    letterSpacing: 1.1,
+    textTransform: "uppercase",
+    marginBottom: 4,
+  },
+  sanctuaryTitle: {
+    color: "#173826",
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: "900",
+    letterSpacing: -0.45,
+  },
+  sanctuaryStagePill: {
+    backgroundColor: "rgba(23,56,38,0.08)",
+    borderRadius: 999,
+    paddingVertical: 7,
+    paddingHorizontal: 11,
+    borderWidth: 1,
+    borderColor: "rgba(23,56,38,0.08)",
+  },
+  sanctuaryStagePillText: {
+    color: "rgba(23,56,38,0.72)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "900",
+  },
+  sanctuaryScene: {
+    height: 230,
+    borderRadius: 26,
+    backgroundColor: "#214B32",
+    overflow: "hidden",
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: "rgba(23,56,38,0.12)",
+  },
+  sanctuaryWindowGlow: {
+    position: "absolute",
+    top: 26,
+    left: 54,
+    right: 54,
+    height: 104,
+    borderRadius: 58,
+    backgroundColor: "rgba(247,195,107,0.68)",
+  },
+  sanctuaryWindowFrame: {
+    position: "absolute",
+    top: 31,
+    left: 68,
+    right: 68,
+    height: 112,
+    borderRadius: 56,
+    borderWidth: 2,
+    borderColor: "rgba(255,248,237,0.5)",
+  },
+  sanctuaryWindowDivider: {
+    position: "absolute",
+    top: 35,
+    alignSelf: "center",
+    width: 2,
+    height: 102,
+    borderRadius: 1,
+    backgroundColor: "rgba(255,248,237,0.44)",
+  },
+  sanctuaryFloor: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 76,
+    backgroundColor: "rgba(184,144,104,0.78)",
+  },
+  sanctuaryRug: {
+    position: "absolute",
+    left: 64,
+    right: 64,
+    bottom: 24,
+    height: 30,
+    borderRadius: 20,
+    backgroundColor: "rgba(201,133,104,0.88)",
+  },
+  sanctuaryChair: {
+    position: "absolute",
+    left: 74,
+    bottom: 46,
+    width: 84,
+    height: 76,
+    borderRadius: 24,
+    backgroundColor: "#6A463B",
+  },
+  sanctuaryBlanket: {
+    position: "absolute",
+    right: 10,
+    bottom: 8,
+    width: 32,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: "rgba(247,195,107,0.78)",
+  },
+  sanctuaryPlantPot: {
+    position: "absolute",
+    right: 74,
+    bottom: 54,
+    width: 36,
+    height: 28,
+    borderRadius: 10,
+    backgroundColor: "#C98568",
+  },
+  sanctuaryLeaf: {
+    position: "absolute",
+    right: 78,
+    bottom: 78,
+    width: 28,
+    height: 42,
+    borderRadius: 20,
+    backgroundColor: "#748A5D",
+  },
+  sanctuaryLeafOne: {
+    transform: [{ rotate: "-22deg" }],
+  },
+  sanctuaryLeafTwo: {
+    right: 94,
+    bottom: 82,
+    backgroundColor: "#5F754D",
+    transform: [{ rotate: "24deg" }],
+  },
+  sanctuaryLeafGrown: {
+    height: 55,
+    bottom: 82,
+  },
+  unlitCorner: {
+    position: "absolute",
+    right: 38,
+    bottom: 54,
+    width: 62,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "rgba(23,56,38,0.18)",
+  },
+  ironStove: {
+    position: "absolute",
+    right: 34,
+    bottom: 52,
+    width: 68,
+    height: 50,
+    borderRadius: 12,
+    backgroundColor: "#343633",
+    borderWidth: 1,
+    borderColor: "rgba(255,248,237,0.12)",
+  },
+  ironStovePipe: {
+    position: "absolute",
+    top: -58,
+    left: 30,
+    width: 8,
+    height: 62,
+    borderRadius: 4,
+    backgroundColor: "#343633",
+  },
+  ironStoveWindow: {
+    position: "absolute",
+    top: 11,
+    left: 14,
+    right: 14,
+    height: 25,
+    borderRadius: 6,
+    backgroundColor: "#252420",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  faintEmber: {
+    width: 18,
+    height: 6,
+    borderRadius: 6,
+    backgroundColor: "rgba(239,143,62,0.5)",
+  },
+  fireGlow: {
+    position: "absolute",
+    width: 40,
+    height: 24,
+    borderRadius: 14,
+    backgroundColor: "rgba(239,143,62,0.78)",
+  },
+  fireIcon: {
+    color: "#F7C36B",
+    fontSize: 18,
+    lineHeight: 22,
+    fontWeight: "900",
+  },
+  sanctuaryBookStack: {
+    position: "absolute",
+    left: 28,
+    bottom: 54,
+    width: 48,
+    height: 28,
+    justifyContent: "flex-end",
+    backgroundColor: "transparent",
+  },
+  sanctuaryBookOne: {
+    width: 44,
+    height: 7,
+    borderRadius: 3,
+    backgroundColor: "#F7C36B",
+  },
+  sanctuaryBookTwo: {
+    width: 36,
+    height: 7,
+    borderRadius: 3,
+    backgroundColor: "#C98568",
+    marginBottom: 3,
+  },
+  sanctuaryBookThree: {
+    width: 42,
+    height: 7,
+    borderRadius: 3,
+    backgroundColor: "#FFF8ED",
+    marginBottom: 3,
+  },
+  sanctuaryMug: {
+    position: "absolute",
+    left: 166,
+    bottom: 56,
+    width: 24,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#FFF8ED",
+  },
+  sanctuaryShelf: {
+    position: "absolute",
+    left: 36,
+    top: 74,
+    width: 92,
+    height: 42,
+    borderRadius: 8,
+    backgroundColor: "rgba(106,70,59,0.78)",
+    flexDirection: "row",
+    alignItems: "flex-end",
+    paddingHorizontal: 9,
+    paddingBottom: 8,
+    gap: 5,
+  },
+  sanctuaryShelfBookOne: {
+    width: 10,
+    height: 24,
+    borderRadius: 2,
+    backgroundColor: "#F7C36B",
+  },
+  sanctuaryShelfBookTwo: {
+    width: 10,
+    height: 18,
+    borderRadius: 2,
+    backgroundColor: "#FFF8ED",
+  },
+  sanctuaryShelfBookThree: {
+    width: 10,
+    height: 28,
+    borderRadius: 2,
+    backgroundColor: "#C98568",
+  },
+  sanctuaryMainCopy: {
+    color: "#173826",
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: "900",
+    letterSpacing: -0.2,
+  },
+  sanctuarySubCopy: {
+    color: "rgba(31,41,51,0.64)",
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: "600",
+    marginTop: 5,
   },
   startHero: {
     minHeight: 80,
@@ -1684,6 +2294,290 @@ const styles = StyleSheet.create({
     color: colors.sessionBackground,
     fontSize: 15,
     lineHeight: 21,
+    fontWeight: "900",
+  },
+
+  revealScreen: {
+    flex: 1,
+    backgroundColor: colors.sessionBackground,
+    paddingHorizontal: 24,
+    paddingTop: 70,
+    paddingBottom: 34,
+    overflow: "hidden",
+  },
+  revealContent: {
+    flexGrow: 1,
+    justifyContent: "center",
+    backgroundColor: "transparent",
+    paddingVertical: 28,
+  },
+  revealEyebrow: {
+    color: "rgba(255,255,255,0.68)",
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "900",
+    letterSpacing: 1.4,
+    textTransform: "uppercase",
+    textAlign: "center",
+    marginBottom: 12,
+  },
+  revealTitle: {
+    color: "#FFF8ED",
+    fontSize: 34,
+    lineHeight: 41,
+    fontWeight: "900",
+    letterSpacing: -0.8,
+    textAlign: "center",
+    marginBottom: 22,
+  },
+  revealSceneCard: {
+    height: 250,
+    borderRadius: 32,
+    backgroundColor: "#214B32",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    overflow: "hidden",
+    marginBottom: 18,
+  },
+  revealWindowGlow: {
+    position: "absolute",
+    top: 28,
+    left: 56,
+    right: 56,
+    height: 104,
+    borderRadius: 52,
+    backgroundColor: "#F7C36B",
+    opacity: 0.76,
+  },
+  revealFloor: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: 82,
+    backgroundColor: "rgba(184, 144, 104, 0.72)",
+  },
+  revealRug: {
+    position: "absolute",
+    left: 74,
+    right: 74,
+    bottom: 24,
+    height: 28,
+    borderRadius: 999,
+    backgroundColor: "#C98568",
+  },
+  revealChair: {
+    position: "absolute",
+    left: 82,
+    bottom: 54,
+    width: 74,
+    height: 76,
+    borderRadius: 24,
+    backgroundColor: "#6A463B",
+  },
+  revealBlanket: {
+    position: "absolute",
+    right: 10,
+    bottom: 10,
+    width: 34,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: "#F7C36B",
+    opacity: 0.82,
+  },
+  revealPlantPot: {
+    position: "absolute",
+    right: 82,
+    bottom: 54,
+    width: 34,
+    height: 26,
+    borderRadius: 10,
+    backgroundColor: "#C98568",
+  },
+  revealLeaf: {
+    position: "absolute",
+    width: 30,
+    height: 42,
+    borderRadius: 20,
+    backgroundColor: "#748A5D",
+  },
+  revealLeafOne: {
+    right: 94,
+    bottom: 78,
+    transform: [{ rotate: "-24deg" }],
+  },
+  revealLeafTwo: {
+    right: 70,
+    bottom: 82,
+    backgroundColor: "#5F754D",
+    transform: [{ rotate: "24deg" }],
+  },
+  revealIronStove: {
+    position: "absolute",
+    right: 46,
+    bottom: 58,
+    width: 64,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: "#343633",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  revealIronStovePipe: {
+    position: "absolute",
+    top: -52,
+    width: 8,
+    height: 58,
+    borderRadius: 4,
+    backgroundColor: "#343633",
+  },
+  revealIronStoveWindow: {
+    width: 38,
+    height: 24,
+    borderRadius: 7,
+    backgroundColor: "#252420",
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+  },
+  revealFireGlow: {
+    position: "absolute",
+    width: 38,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: "#EF8F3E",
+    opacity: 0.78,
+  },
+  revealFireIcon: {
+    color: "#F7C36B",
+    fontSize: 20,
+    lineHeight: 22,
+  },
+  revealFaintEmber: {
+    width: 14,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: "#EF8F3E",
+    opacity: 0.62,
+  },
+  revealBookStack: {
+    position: "absolute",
+    left: 46,
+    bottom: 54,
+    gap: 3,
+  },
+  revealBookOne: {
+    width: 44,
+    height: 7,
+    borderRadius: 3,
+    backgroundColor: "#F7C36B",
+  },
+  revealBookTwo: {
+    width: 36,
+    height: 7,
+    borderRadius: 3,
+    backgroundColor: "#C98568",
+  },
+  revealBookThree: {
+    width: 48,
+    height: 7,
+    borderRadius: 3,
+    backgroundColor: "#FFF8ED",
+  },
+  revealMug: {
+    position: "absolute",
+    left: 166,
+    bottom: 64,
+    width: 24,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#FFF8ED",
+  },
+  revealShelf: {
+    position: "absolute",
+    left: 56,
+    top: 74,
+    width: 82,
+    height: 40,
+    borderRadius: 8,
+    backgroundColor: "rgba(106, 70, 59, 0.72)",
+    flexDirection: "row",
+    alignItems: "flex-end",
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+    gap: 4,
+  },
+  revealShelfBookOne: {
+    width: 10,
+    height: 22,
+    borderRadius: 2,
+    backgroundColor: "#F7C36B",
+  },
+  revealShelfBookTwo: {
+    width: 10,
+    height: 17,
+    borderRadius: 2,
+    backgroundColor: "#FFF8ED",
+  },
+  revealShelfBookThree: {
+    width: 10,
+    height: 25,
+    borderRadius: 2,
+    backgroundColor: "#C98568",
+  },
+  revealCopyCard: {
+    backgroundColor: "rgba(255,248,237,0.94)",
+    borderRadius: 28,
+    padding: 22,
+    marginBottom: 16,
+  },
+  revealStageLabel: {
+    color: colors.accentDark,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "900",
+    letterSpacing: 1.1,
+    textTransform: "uppercase",
+    marginBottom: 8,
+  },
+  revealMainCopy: {
+    color: colors.text,
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: "900",
+    letterSpacing: -0.4,
+    marginBottom: 8,
+  },
+  revealSubCopy: {
+    color: colors.mutedText,
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: "600",
+  },
+  revealMinutesPill: {
+    alignSelf: "flex-start",
+    marginTop: 18,
+    backgroundColor: colors.softAccent,
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 13,
+  },
+  revealMinutesText: {
+    color: colors.accentDark,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "900",
+  },
+  revealContinueButton: {
+    backgroundColor: "#FFF8ED",
+    borderRadius: 999,
+    paddingVertical: 16,
+    alignItems: "center",
+  },
+  revealContinueButtonText: {
+    color: colors.sessionBackground,
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: "900",
   },
 
