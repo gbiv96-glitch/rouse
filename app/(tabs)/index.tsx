@@ -390,7 +390,7 @@ export default function HomeScreen() {
     scheduleCountdown("3", 220);
     scheduleCountdown("2", 1040);
     scheduleCountdown("1", 1860);
-    scheduleCountdown("Begin", 2700, Haptics.ImpactFeedbackStyle.Medium);
+    scheduleCountdown("Start", 2700, Haptics.ImpactFeedbackStyle.Medium);
 
     animation.start(({ finished }) => {
       if (finished) {
@@ -1122,10 +1122,10 @@ export default function HomeScreen() {
                 <ThemedText style={styles.sessionBookIcon}>♜</ThemedText>
               </View>
               <ThemedText style={styles.sessionTitle}>
-                The beacon is lit
+                Your reading session has begun
               </ThemedText>
               <ThemedText style={styles.sessionSubtitle}>
-                Your reading session has begun. We’ll keep time.
+                We will keep time.                   
               </ThemedText>
 
               <View style={styles.ritualCountdownArea}>
@@ -1167,7 +1167,7 @@ export default function HomeScreen() {
 
               <View style={styles.focusPill}>
                 <ThemedText style={styles.focusPillText}>
-                  The beacon is keeping time.
+                  Settle in.                 
                 </ThemedText>
               </View>
             </View>
