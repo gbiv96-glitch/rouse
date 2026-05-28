@@ -31,8 +31,6 @@ const ACTIVE_SESSION_TODAY_START_SECONDS_KEY =
   "activeReadingSessionTodayStartSeconds";
 const ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY =
   "activeReadingSessionLifetimeStartSeconds";
-const DAILY_GOAL_MINUTES = 10;
-
 const colors = {
   background: "#F7F3EA",
   card: "#FFFFFF",
@@ -88,31 +86,31 @@ const sanctuaryStages: SanctuaryStage[] = [
     stage: 0,
     title: "Your place is here.",
     subtitle: "Start a session, then save the book you read.",
-    shortLabel: "The Book Is Placed",
+    shortLabel: "Reading Place",
   },
   {
     stage: 1,
     title: "The light is on.",
     subtitle: "Your first saved session gave this book a place.",
-    shortLabel: "The Light Is On",
+    shortLabel: "A Quiet Light",
   },
   {
     stage: 2,
     title: "This book is becoming familiar.",
     subtitle: "Your reading place is warming around it.",
-    shortLabel: "The Shrine Warms",
+    shortLabel: "A Familiar Book",
   },
   {
     stage: 3,
     title: "Your reading rhythm is gathering.",
     subtitle: "Sessions, minutes, and memory are collecting here.",
-    shortLabel: "The Place Remembers",
+    shortLabel: "Private Thread",
   },
   {
     stage: 4,
     title: "This place is yours now.",
     subtitle: "Your reading life has a steady light in it.",
-    shortLabel: "A Reading Life",
+    shortLabel: "Steady Light",
   },
 ];
 
@@ -123,41 +121,6 @@ function getSanctuaryStage(totalSessions: number, totalMinutes: number) {
   if (totalSessions >= 1) return 1;
   return 0;
 }
-
-function getNextSanctuaryMilestoneCopy(
-  totalSessions: number,
-  totalMinutes: number,
-) {
-  const currentStage = getSanctuaryStage(totalSessions, totalMinutes);
-
-  if (currentStage >= 4) {
-    return "Your reading place is fully lit.";
-  }
-
-  const nextMilestones = [
-    { sessionTarget: 1, minuteTarget: null, label: "the light turns on" },
-    { sessionTarget: 3, minuteTarget: 60, label: "the shrine warms" },
-    { sessionTarget: 6, minuteTarget: 180, label: "the place remembers" },
-    { sessionTarget: 10, minuteTarget: 360, label: "your reading life steadies" },
-  ];
-
-  const nextMilestone = nextMilestones[currentStage];
-  const sessionsRemaining = Math.max(
-    0,
-    nextMilestone.sessionTarget - totalSessions,
-  );
-  const minutesRemaining =
-    nextMilestone.minuteTarget === null
-      ? null
-      : Math.max(0, Math.ceil(nextMilestone.minuteTarget - totalMinutes));
-
-  if (minutesRemaining !== null && minutesRemaining <= 30) {
-    return `${formatDuration(minutesRemaining)} until ${nextMilestone.label}.`;
-  }
-
-  return `${sessionsRemaining} ${sessionsRemaining === 1 ? "session" : "sessions"} until ${nextMilestone.label}.`;
-}
-
 
 function getSanctuaryRevealCopy(stage: number, stageChanged: boolean) {
   if (!stageChanged) {
@@ -170,24 +133,24 @@ function getSanctuaryRevealCopy(stage: number, stageChanged: boolean) {
 
   if (stage === 1) {
     return {
-      title: "The light is on.",
-      subtitle: "Your first saved session gave this book a place.",
-      ctaText: "See your place",
+      title: "This book has a place here.",
+      subtitle: "Your reading life has a little more shape now.",
+      ctaText: "Return home",
     };
   }
 
   if (stage === 2) {
     return {
-      title: "The shrine feels warmer.",
-      subtitle: "This book is becoming part of your rhythm.",
-      ctaText: "Return to the light",
+      title: "You spent time with this book.",
+      subtitle: "A quiet note in the day has been kept.",
+      ctaText: "Return home",
     };
   }
 
   if (stage === 3) {
     return {
-      title: "Your place remembers.",
-      subtitle: "Sessions, minutes, and memory are collecting here.",
+      title: "This thread continues.",
+      subtitle: "Your reading life has another small marker.",
       ctaText: "Return home",
     };
   }
@@ -1010,11 +973,9 @@ export default function HomeScreen() {
   };
 
   const formattedTime = formatTime(seconds);
-  const goalProgressMinutes = seconds / 60;
-  const lifetimeMinutes = lifetimeSeconds / 60;
-  const goalReached = seconds >= DAILY_GOAL_MINUTES * 60;
   const visibleSessions = recentSessions.slice(0, 3);
   const latestSession = recentSessions[0];
+  const hasPlacedBook = Boolean(currentBookTitle || latestSession);
   const currentBookDisplayTitle =
     currentBookTitle || latestSession?.title || "Your next book";
   const currentBookMeta = currentBookTitle
@@ -1022,18 +983,12 @@ export default function HomeScreen() {
       ? `Last read ${formatSessionTimestamp(latestSession.createdAt, latestSession.date)}`
       : "Saved as your current book"
     : "Save a session to place a book here";
+  const readingPlaceContinuityCopy = hasPlacedBook
+    ? "Your book is waiting."
+    : "Your first book can live here.";
   const revealBookTitle =
     bookTitle.trim() || manualLogBookTitle.trim() || currentBookTitle || latestSession?.title || "your book";
 
-  const sanctuaryStageNumber = getSanctuaryStage(
-    totalCompletedSessions,
-    lifetimeMinutes,
-  );
-  const currentSanctuaryStage = sanctuaryStages[sanctuaryStageNumber];
-  const nextSanctuaryMilestoneCopy = getNextSanctuaryMilestoneCopy(
-    totalCompletedSessions,
-    lifetimeMinutes,
-  );
   const ritualBreathScale = ritualBreath.interpolate({
     inputRange: [0, 1],
     outputRange: [1, 1.08],
@@ -1490,7 +1445,7 @@ export default function HomeScreen() {
           )}
 
           <ThemedText style={styles.closeHelperText}>
-            Manual logs count toward your reading time and reading-place progress, but they’ll be marked as logged sessions in your history.
+            Add quiet reading time from away from the timer. It will be marked as a logged session in your history.
           </ThemedText>
 
           <View style={styles.closeButtonRow}>
@@ -1681,7 +1636,7 @@ export default function HomeScreen() {
               <ThemedText style={styles.bookShrineIcon}>✦</ThemedText>
             </View>
             <ThemedText style={styles.bookShrineStage}>
-              {currentSanctuaryStage.shortLabel}
+              Reading place
             </ThemedText>
           </View>
 
@@ -1713,10 +1668,10 @@ export default function HomeScreen() {
             <ThemedText style={styles.bookShrineBookMeta}>
               {currentBookMeta}
             </ThemedText>
-            <View style={styles.bookShrineProgressRow}>
-              <View style={styles.bookShrineProgressDot} />
-              <ThemedText style={styles.bookShrineProgressText}>
-                {nextSanctuaryMilestoneCopy}
+            <View style={styles.bookShrineContinuityRow}>
+              <View style={styles.bookShrineContinuityDot} />
+              <ThemedText style={styles.bookShrineContinuityText}>
+                {readingPlaceContinuityCopy}
               </ThemedText>
             </View>
           </View>
@@ -1725,7 +1680,6 @@ export default function HomeScreen() {
         <Pressable
           style={({ pressed }) => [
             styles.startHero,
-            goalReached && styles.startHeroGoalReached,
             pressed && styles.buttonPressed,
           ]}
           onPress={handlePress}
@@ -1758,7 +1712,7 @@ export default function HomeScreen() {
           <View style={styles.manualLogButtonContent}>
             <ThemedText style={styles.manualLogIcon}>＋</ThemedText>
             <ThemedText style={styles.manualLogButtonText}>
-              Log reading manually
+              Add a reading moment
             </ThemedText>
             <ThemedText style={styles.manualLogChevron}>›</ThemedText>
           </View>
@@ -1771,19 +1725,6 @@ export default function HomeScreen() {
             <ThemedText style={styles.todayCaption}>minutes read</ThemedText>
           </View>
 
-          <View style={styles.todayDivider} />
-
-          <View style={styles.todayRightColumn}>
-            <View style={styles.checkCircle}>
-              <ThemedText style={styles.checkText}>✓</ThemedText>
-            </View>
-            <ThemedText style={styles.goalStatus}>
-              {goalReached ? "Goal reached" : "Daily goal"}
-            </ThemedText>
-            <ThemedText style={styles.goalDetail}>
-              {formatDuration(goalProgressMinutes)} / {formatDuration(DAILY_GOAL_MINUTES)}
-            </ThemedText>
-          </View>
         </ThemedView>
 
         <ThemedView style={styles.currentBookCard}>
@@ -1795,7 +1736,7 @@ export default function HomeScreen() {
               Reading place
             </ThemedText>
             <ThemedText style={styles.currentBookTitleText} numberOfLines={2}>
-              {currentSanctuaryStage.title}
+              {readingPlaceContinuityCopy}
             </ThemedText>
           </View>
           <ThemedText style={styles.currentBookChevron}>›</ThemedText>
@@ -1856,25 +1797,6 @@ export default function HomeScreen() {
           )}
         </ThemedView>
 
-        <ThemedView style={styles.statsRow}>
-          <ThemedView style={styles.statCard}>
-            <View style={styles.statIconCircle}>
-              <ThemedText style={styles.statIcon}>◷</ThemedText>
-            </View>
-            <ThemedText style={styles.statNumber}>
-              {formatDuration(lifetimeMinutes)}
-            </ThemedText>
-            <ThemedText style={styles.statLabel}>Minutes Read</ThemedText>
-          </ThemedView>
-
-          <ThemedView style={styles.statCard}>
-            <View style={styles.statIconCircle}>
-              <ThemedText style={styles.statIcon}>▦</ThemedText>
-            </View>
-            <ThemedText style={styles.statNumber}>{totalDaysRead}</ThemedText>
-            <ThemedText style={styles.statLabel}>Days Read</ThemedText>
-          </ThemedView>
-        </ThemedView>
       </ThemedView>
     </ScrollView>
   );
@@ -3145,9 +3067,6 @@ const styles = StyleSheet.create({
     elevation: 4,
     zIndex: 3,
   },
-  startHeroGoalReached: {
-    backgroundColor: colors.accentDark,
-  },
   startHeroContent: {
     flexDirection: "row",
     alignItems: "center",
@@ -3273,47 +3192,6 @@ const styles = StyleSheet.create({
     color: "rgba(107,114,128,0.72)",
     fontWeight: "600",
     marginTop: 2,
-  },
-  todayDivider: {
-    width: 1,
-    alignSelf: "stretch",
-    backgroundColor: "rgba(47,93,80,0.055)",
-    marginHorizontal: 17,
-  },
-  todayRightColumn: {
-    flex: 1,
-    alignItems: "center",
-    backgroundColor: "transparent",
-  },
-  checkCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(221,235,228,0.58)",
-    marginBottom: 8,
-  },
-  checkText: {
-    fontSize: 21,
-    lineHeight: 26,
-    color: "rgba(47,93,80,0.72)",
-    fontWeight: "800",
-  },
-  goalStatus: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: "rgba(47,93,80,0.7)",
-    fontWeight: "700",
-    textAlign: "center",
-  },
-  goalDetail: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: "rgba(31,41,51,0.72)",
-    marginTop: 3,
-    fontWeight: "500",
-    textAlign: "center",
   },
   identityCard: {
     backgroundColor: colors.card,
@@ -3664,51 +3542,6 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontWeight: "900",
     color: colors.accent,
-  },
-  statsRow: {
-    flexDirection: "row",
-    gap: 14,
-    backgroundColor: "transparent",
-    marginTop: 2,
-    zIndex: 2,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: "rgba(255,255,255,0.58)",
-    borderRadius: 20,
-    paddingVertical: 16,
-    paddingHorizontal: 14,
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.07)",
-  },
-  statIconCircle: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.softAccent,
-    marginBottom: 14,
-  },
-  statIcon: {
-    fontSize: 18,
-    lineHeight: 22,
-    color: colors.accent,
-    fontWeight: "900",
-  },
-  statNumber: {
-    fontSize: 23,
-    lineHeight: 30,
-    fontWeight: "800",
-    color: colors.accent,
-  },
-  statLabel: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: colors.mutedText,
-    fontWeight: "600",
-    marginTop: 3,
   },
   sessionScreen: {
     flex: 1,
@@ -4666,7 +4499,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 5,
   },
-  bookShrineProgressRow: {
+  bookShrineContinuityRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -4674,13 +4507,13 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     marginTop: 10,
   },
-  bookShrineProgressDot: {
+  bookShrineContinuityDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
     backgroundColor: "rgba(47,93,80,0.44)",
   },
-  bookShrineProgressText: {
+  bookShrineContinuityText: {
     color: "rgba(47,93,80,0.66)",
     fontSize: 12,
     lineHeight: 17,
