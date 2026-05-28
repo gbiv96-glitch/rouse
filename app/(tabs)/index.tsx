@@ -40,15 +40,6 @@ const encouragementMessages = [
   "A little reading still counts.",
 ];
 
-const ritualPrompts = [
-  "Settle in.\nWe’ve got time.",
-  "Your book is waiting.",
-  "One page becomes momentum.",
-  "Reading time, not screen time.",
-  "You don’t need hours.\nJust a moment.",
-  "Open the book.\nWe’ll keep time.",
-];
-
 const colors = {
   background: "#F7F3EA",
   card: "#FFFFFF",
@@ -67,6 +58,7 @@ type ReadingSession = {
   id: string;
   title: string;
   minutes: string;
+  note?: string;
   createdAt?: string;
   date?: string;
   source?: "timed" | "logged";
@@ -281,9 +273,7 @@ export default function HomeScreen() {
     useState<SanctuaryReveal | null>(null);
   const [showRitualScreen, setShowRitualScreen] = useState(false);
   const [ritualCountdownText, setRitualCountdownText] = useState("3");
-  const [ritualPrompt] = useState(
-    () => ritualPrompts[Math.floor(Math.random() * ritualPrompts.length)],
-  );
+  const [manualLogNote, setManualLogNote] = useState("");
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ritualOpacity = useRef(new Animated.Value(0)).current;
@@ -856,6 +846,7 @@ export default function HomeScreen() {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setManualLogMinutes("30");
     setManualLogBookTitle(currentBookTitle);
+    setManualLogNote("");
     setManualLogError(null);
     setSanctuaryReveal(null);
     setSessionMessage(null);
@@ -867,6 +858,7 @@ export default function HomeScreen() {
   const cancelManualLog = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setShowManualLogInput(false);
+    setManualLogNote("");
     setManualLogError(null);
   };
 
@@ -884,6 +876,7 @@ export default function HomeScreen() {
     const manualSessionSeconds = Math.round(cappedMinutes * 60);
     const sessionMinutes = (manualSessionSeconds / 60).toFixed(1);
     const trimmedTitle = manualLogBookTitle.trim();
+    const trimmedNote = manualLogNote.trim();
     const titleToSave = trimmedTitle || "Logged reading";
     const previousLifetimeSeconds = lifetimeSeconds;
     const updatedTodaySeconds = seconds + manualSessionSeconds;
@@ -895,6 +888,7 @@ export default function HomeScreen() {
       id: Date.now().toString(),
       title: titleToSave,
       minutes: sessionMinutes,
+      note: trimmedNote || undefined,
       createdAt: new Date().toISOString(),
       source: "logged",
     };
@@ -921,6 +915,7 @@ export default function HomeScreen() {
     setRecentSessions(updatedSessions);
     setTotalCompletedSessions(updatedTotalCompletedSessions);
     setShowManualLogInput(false);
+    setManualLogNote("");
     setManualLogError(null);
 
     if (trimmedTitle) {
@@ -1376,13 +1371,22 @@ export default function HomeScreen() {
           />
 
           <TextInput
-            placeholder="Book title (optional)"
+            placeholder="Book title"
             placeholderTextColor="rgba(255,255,255,0.45)"
             value={manualLogBookTitle}
             onChangeText={setManualLogBookTitle}
             style={[styles.closeBookInput, styles.manualBookInput]}
-            returnKeyType="done"
-            onSubmitEditing={saveManualReadingLog}
+            returnKeyType="next"
+          />
+
+          <TextInput
+            placeholder="Optional note or reflection"
+            placeholderTextColor="rgba(255,255,255,0.45)"
+            value={manualLogNote}
+            onChangeText={setManualLogNote}
+            style={[styles.closeBookInput, styles.manualBookInput, styles.manualNoteInput]}
+            multiline
+            textAlignVertical="top"
           />
 
           {manualLogError && (
@@ -1712,8 +1716,13 @@ export default function HomeScreen() {
                     {session.title}
                   </ThemedText>
                   <ThemedText style={styles.sessionDate}>
-                    {session.source === "logged" ? "Logged" : "Timed"} • {formatSessionTimestamp(session.createdAt, session.date)}
+                    {session.source === "logged" ? "Manually Logged" : "Timed"} • {formatSessionTimestamp(session.createdAt, session.date)}
                   </ThemedText>
+                  {session.note ? (
+                    <ThemedText style={styles.sessionNote} numberOfLines={2}>
+                      {session.note}
+                    </ThemedText>
+                  ) : null}
                 </View>
 
                 <ThemedText style={styles.sessionMinutes}>
@@ -3537,6 +3546,13 @@ const styles = StyleSheet.create({
     marginTop: 3,
     fontWeight: "600",
   },
+  sessionNote: {
+    color: "rgba(107,114,128,0.78)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
+    marginTop: 5,
+  },
   sessionMinutes: {
     fontSize: 16,
     lineHeight: 22,
@@ -3865,6 +3881,11 @@ const styles = StyleSheet.create({
   },
   manualBookInput: {
     marginTop: 13,
+  },
+  manualNoteInput: {
+    minHeight: 92,
+    fontSize: 16,
+    lineHeight: 22,
   },
   manualPresetRow: {
     flexDirection: "row",
