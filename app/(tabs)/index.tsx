@@ -1075,11 +1075,11 @@ export default function HomeScreen() {
           <View style={styles.activeBeaconBadge}>
             <ThemedText style={styles.activeBeaconIcon}>♜</ThemedText>
           </View>
-          <ThemedText style={styles.quietSessionTitle}>
-            Your session has begun.
+          <ThemedText style={styles.quietSessionEyebrow}>
+            Reading session
           </ThemedText>
-          <ThemedText style={styles.quietSessionKeeper}>
-            Rousd is keeping time.
+          <ThemedText style={styles.quietSessionTitle}>
+            Your time is being kept.
           </ThemedText>
           <ThemedText style={styles.quietSessionSubtitle}>
             {"Return when you're ready."}
@@ -3561,30 +3561,39 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "transparent",
+    paddingHorizontal: 10,
+  },
+  quietSessionEyebrow: {
+    color: "rgba(255,248,237,0.54)",
+    fontSize: 12,
+    lineHeight: 18,
+    fontWeight: "900",
+    letterSpacing: 1.8,
+    textTransform: "uppercase",
+    textAlign: "center",
+    marginTop: 34,
   },
   quietSessionTitle: {
     color: "#FFF8ED",
-    fontSize: 28,
-    lineHeight: 36,
-    fontWeight: "800",
+    fontSize: 36,
+    lineHeight: 44,
+    fontWeight: "400",
     textAlign: "center",
-    letterSpacing: -0.3,
-    marginTop: 24,
-  },
-  quietSessionKeeper: {
-    color: "rgba(255,248,237,0.74)",
-    fontSize: 17,
-    lineHeight: 24,
-    fontWeight: "700",
-    textAlign: "center",
-    marginTop: 10,
+    letterSpacing: -0.4,
+    marginTop: 18,
+    maxWidth: 320,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
   },
   quietSessionSubtitle: {
-    color: "rgba(255,248,237,0.52)",
-    fontSize: 16,
-    lineHeight: 23,
+    color: "rgba(255,248,237,0.62)",
+    fontSize: 17,
+    lineHeight: 25,
     fontWeight: "600",
-    marginTop: 8,
+    marginTop: 14,
     textAlign: "center",
   },
   quietBottomArea: {
@@ -3592,15 +3601,15 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   quietEndSessionButton: {
-    paddingVertical: 13,
-    paddingHorizontal: 22,
+    paddingVertical: 14,
+    paddingHorizontal: 28,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
-    backgroundColor: "rgba(255,255,255,0.06)",
+    borderColor: "rgba(255,248,237,0.24)",
+    backgroundColor: "rgba(255,248,237,0.08)",
   },
   quietEndSessionText: {
-    color: "rgba(255,255,255,0.56)",
+    color: "rgba(255,248,237,0.72)",
     fontSize: 14,
     lineHeight: 20,
     fontWeight: "800",
@@ -4543,20 +4552,19 @@ const styles = StyleSheet.create({
     transform: [{ rotate: "0deg" }],
   },
   activeBeaconBadge: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(247,195,107,0.08)",
+    backgroundColor: "rgba(255,248,237,0.07)",
     borderWidth: 1,
-    borderColor: "rgba(247,195,107,0.18)",
-    marginTop: 22,
+    borderColor: "rgba(247,195,107,0.16)",
   },
   activeBeaconIcon: {
-    color: "rgba(247,195,107,0.86)",
-    fontSize: 20,
-    lineHeight: 24,
+    color: "rgba(247,195,107,0.72)",
+    fontSize: 22,
+    lineHeight: 26,
   },
   bookReturnScreen: {
     flex: 1,
