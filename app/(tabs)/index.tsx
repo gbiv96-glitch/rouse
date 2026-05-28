@@ -12,6 +12,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
@@ -170,13 +171,6 @@ function calculateElapsedSeconds(startTime: number) {
   return Math.max(0, Math.floor((Date.now() - startTime) / 1000));
 }
 
-function formatTime(totalSeconds: number) {
-  const minutes = Math.floor(totalSeconds / 60);
-  const remainingSeconds = totalSeconds % 60;
-
-  return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-}
-
 function formatSessionTimestamp(createdAt?: string, fallbackDate?: string) {
   if (!createdAt) return fallbackDate || "Recently";
 
@@ -202,6 +196,7 @@ function formatSessionTimestamp(createdAt?: string, fallbackDate?: string) {
 }
 
 export default function HomeScreen() {
+  const insets = useSafeAreaInsets();
   const [isReading, setIsReading] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [lifetimeSeconds, setLifetimeSeconds] = useState(0);
@@ -972,7 +967,6 @@ export default function HomeScreen() {
     await AsyncStorage.setItem(HAS_SEEN_WELCOME_KEY, "true");
   };
 
-  const formattedTime = formatTime(seconds);
   const visibleSessions = recentSessions.slice(0, 3);
   const latestSession = recentSessions[0];
   const hasPlacedBook = Boolean(currentBookTitle || latestSession);
@@ -1593,7 +1587,10 @@ export default function HomeScreen() {
   return (
     <ScrollView
       style={styles.screen}
-      contentContainerStyle={styles.scrollContent}
+      contentContainerStyle={[
+        styles.scrollContent,
+        { paddingBottom: 132 + insets.bottom },
+      ]}
     >
       <ThemedView style={styles.container}>
         <View pointerEvents="none" style={styles.warmVignetteTop} />
@@ -1718,30 +1715,6 @@ export default function HomeScreen() {
           </View>
         </Pressable>
 
-        <ThemedView style={styles.todayCard}>
-          <View style={styles.todayLeftColumn}>
-            <ThemedText style={styles.todayLabel}>Today</ThemedText>
-            <ThemedText style={styles.todayTime}>{formattedTime}</ThemedText>
-            <ThemedText style={styles.todayCaption}>minutes read</ThemedText>
-          </View>
-
-        </ThemedView>
-
-        <ThemedView style={styles.currentBookCard}>
-          <View style={styles.coverPlaceholder}>
-            <ThemedText style={styles.coverPlaceholderText}>✦</ThemedText>
-          </View>
-          <View style={styles.currentBookCopy}>
-            <ThemedText style={styles.premiumCurrentBookLabel}>
-              Reading place
-            </ThemedText>
-            <ThemedText style={styles.currentBookTitleText} numberOfLines={2}>
-              {readingPlaceContinuityCopy}
-            </ThemedText>
-          </View>
-          <ThemedText style={styles.currentBookChevron}>›</ThemedText>
-        </ThemedView>
-
         {sessionMessage && (
           <ThemedView style={styles.sessionToast}>
             <ThemedText style={styles.sessionToastText}>
@@ -1752,9 +1725,6 @@ export default function HomeScreen() {
 
         <View style={styles.sessionsHeaderRow}>
           <ThemedText style={styles.sessionsTitle}>Recent sessions</ThemedText>
-          {recentSessions.length > 3 && (
-            <ThemedText style={styles.viewAllText}>View all</ThemedText>
-          )}
         </View>
 
         <ThemedView style={styles.sessionsCard}>
@@ -1825,15 +1795,15 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    paddingBottom: 120,
+    paddingBottom: 132,
   },
   container: {
     flex: 1,
     position: "relative",
-    paddingHorizontal: 24,
-    paddingTop: 38,
-    paddingBottom: 40,
-    gap: 12,
+    paddingHorizontal: 26,
+    paddingTop: 46,
+    paddingBottom: 54,
+    gap: 16,
     backgroundColor: colors.background,
     overflow: "hidden",
   },
@@ -2173,7 +2143,7 @@ const styles = StyleSheet.create({
   },
   headerRow: {
     backgroundColor: "transparent",
-    marginBottom: 8,
+    marginBottom: 4,
     zIndex: 2,
   },
   appName: {
@@ -2190,10 +2160,10 @@ const styles = StyleSheet.create({
   },
   headerSubtitle: {
     fontSize: 15,
-    lineHeight: 21,
+    lineHeight: 22,
     color: colors.mutedText,
     fontWeight: "600",
-    marginTop: 2,
+    marginTop: 6,
   },
   sanctuaryHero: {
     borderRadius: 30,
@@ -3054,11 +3024,11 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   startHero: {
-    minHeight: 62,
+    minHeight: 64,
     marginTop: 2,
     backgroundColor: "#1F4F3B",
-    borderRadius: 25,
-    paddingHorizontal: 20,
+    borderRadius: 28,
+    paddingHorizontal: 22,
     justifyContent: "center",
     shadowColor: "#315F52",
     shadowOffset: { width: 0, height: 7 },
@@ -3070,7 +3040,7 @@ const styles = StyleSheet.create({
   startHeroContent: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 13,
+    gap: 14,
     backgroundColor: "transparent",
   },
   startHeroIcon: {
@@ -3085,16 +3055,16 @@ const styles = StyleSheet.create({
   },
   startHeroTitle: {
     color: "#FFFFFF",
-    fontSize: 23,
-    lineHeight: 29,
+    fontSize: 21,
+    lineHeight: 28,
     fontWeight: "700",
     letterSpacing: -0.25,
     flexShrink: 1,
   },
   startHeroArrowCircle: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(255,255,255,0.13)",
@@ -3117,7 +3087,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.46)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.07)",
-    borderRadius: 22,
+    borderRadius: 24,
+    minHeight: 56,
     paddingVertical: 13,
     paddingHorizontal: 18,
     zIndex: 3,
@@ -3138,8 +3109,8 @@ const styles = StyleSheet.create({
   manualLogButtonText: {
     flex: 1,
     color: "rgba(36,72,62,0.84)",
-    fontSize: 16,
-    lineHeight: 22,
+    fontSize: 15,
+    lineHeight: 21,
     fontWeight: "700",
   },
   manualLogChevron: {
@@ -3154,43 +3125,6 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: "600",
     textAlign: "center",
-    marginTop: 2,
-  },
-  todayCard: {
-    backgroundColor: "rgba(255,255,255,0.54)",
-    borderRadius: 23,
-    paddingVertical: 17,
-    paddingHorizontal: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.055)",
-    ...softCardShadow,
-    zIndex: 2,
-  },
-  todayLeftColumn: {
-    flex: 1,
-    backgroundColor: "transparent",
-  },
-  todayLabel: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: "rgba(107,114,128,0.78)",
-    fontWeight: "800",
-    marginBottom: 6,
-  },
-  todayTime: {
-    fontSize: 28,
-    lineHeight: 35,
-    fontWeight: "700",
-    color: "rgba(47,93,80,0.72)",
-    letterSpacing: -0.55,
-  },
-  todayCaption: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: "rgba(107,114,128,0.72)",
-    fontWeight: "600",
     marginTop: 2,
   },
   identityCard: {
@@ -3248,20 +3182,6 @@ const styles = StyleSheet.create({
   currentBookIcon: {
     fontSize: 16,
     lineHeight: 20,
-  },
-  premiumCurrentBookLabel: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: colors.mutedText,
-    fontWeight: "800",
-    marginBottom: 3,
-  },
-  currentBookTitleText: {
-    fontSize: 19,
-    lineHeight: 25,
-    color: colors.text,
-    fontWeight: "900",
-    letterSpacing: -0.25,
   },
   ritualCopyBlock: {
     minHeight: 128,
@@ -3345,41 +3265,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     lineHeight: 22,
     opacity: 0.72,
-  },
-  currentBookCard: {
-    backgroundColor: "rgba(255,255,255,0.62)",
-    borderRadius: 22,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 13,
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.07)",
-    ...softCardShadow,
-    zIndex: 2,
-  },
-  coverPlaceholder: {
-    width: 48,
-    height: 64,
-    borderRadius: 8,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(47,93,80,0.12)",
-  },
-  coverPlaceholderText: {
-    fontSize: 23,
-    lineHeight: 29,
-  },
-  currentBookCopy: {
-    flex: 1,
-    backgroundColor: "transparent",
-  },
-  currentBookChevron: {
-    color: "rgba(31,41,51,0.34)",
-    fontSize: 32,
-    lineHeight: 36,
-    fontWeight: "300",
   },
   sessionToast: {
     backgroundColor: colors.softAccent,
@@ -3465,12 +3350,6 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontWeight: "800",
     color: "rgba(31,41,51,0.78)",
-  },
-  viewAllText: {
-    fontSize: 13,
-    lineHeight: 19,
-    color: "rgba(47,93,80,0.72)",
-    fontWeight: "700",
   },
   sessionsCard: {
     backgroundColor: "rgba(255,255,255,0.68)",
@@ -4302,16 +4181,16 @@ const styles = StyleSheet.create({
   },
 
   bookShrineHero: {
-    borderRadius: 34,
+    borderRadius: 36,
     overflow: "hidden",
     backgroundColor: "rgba(255,248,237,0.76)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.09)",
-    paddingTop: 20,
-    paddingHorizontal: 18,
-    paddingBottom: 18,
+    paddingTop: 22,
+    paddingHorizontal: 20,
+    paddingBottom: 20,
     zIndex: 2,
-    ...cardShadow,
+    ...softCardShadow,
   },
   bookShrineWarmGlow: {
     position: "absolute",
@@ -4390,8 +4269,8 @@ const styles = StyleSheet.create({
   },
   bookShrineGreeting: {
     color: "#1B2A22",
-    fontSize: 29,
-    lineHeight: 35,
+    fontSize: 30,
+    lineHeight: 36,
     textAlign: "center",
     fontWeight: "400",
     letterSpacing: -0.8,
@@ -4407,19 +4286,19 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     fontWeight: "600",
     textAlign: "center",
-    marginTop: 4,
+    marginTop: 5,
   },
   bookShrineShelf: {
     height: 176,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "transparent",
-    marginTop: 18,
+    marginTop: 20,
   },
   bookShrineCover: {
-    width: 118,
-    height: 158,
-    borderRadius: 10,
+    width: 122,
+    height: 164,
+    borderRadius: 12,
     backgroundColor: "#1E3E32",
     borderWidth: 1,
     borderColor: "rgba(255,248,237,0.36)",
@@ -4427,9 +4306,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: 12,
     shadowColor: "#000",
-    shadowOffset: { width: 0, height: 9 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.16,
+    shadowRadius: 20,
     elevation: 6,
   },
   bookShrineCoverTitle: {
@@ -4448,7 +4327,7 @@ const styles = StyleSheet.create({
   },
   bookShrineLantern: {
     position: "absolute",
-    right: 42,
+    right: 34,
     bottom: 10,
     width: 48,
     height: 76,
@@ -4487,12 +4366,10 @@ const styles = StyleSheet.create({
     marginTop: -2,
   },
   bookShrineInfoCard: {
-    backgroundColor: "rgba(255,255,255,0.72)",
-    borderRadius: 24,
+    backgroundColor: "rgba(255,255,255,0.46)",
+    borderRadius: 26,
     paddingVertical: 15,
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.07)",
+    paddingHorizontal: 18,
   },
   bookShrineBookTitle: {
     color: colors.text,
