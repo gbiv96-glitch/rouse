@@ -1067,22 +1067,22 @@ export default function HomeScreen() {
   }
 
   if (isReading) {
-    const activeSessionSeconds = Math.max(0, seconds - sessionStartSeconds);
-
     return (
       <ThemedView style={styles.sessionScreen}>
         <View style={styles.dimLayer} />
 
         <View style={styles.quietSessionContent}>
-          <ThemedText style={styles.quietSessionLabel}>Reading</ThemedText>
-          <ThemedText style={styles.quietTimerText}>
-            {formatTime(activeSessionSeconds)}
-          </ThemedText>
           <View style={styles.activeBeaconBadge}>
             <ThemedText style={styles.activeBeaconIcon}>♜</ThemedText>
           </View>
+          <ThemedText style={styles.quietSessionTitle}>
+            Your session has begun.
+          </ThemedText>
+          <ThemedText style={styles.quietSessionKeeper}>
+            Rousd is keeping time.
+          </ThemedText>
           <ThemedText style={styles.quietSessionSubtitle}>
-            The story is yours.
+            {"Return when you're ready."}
           </ThemedText>
         </View>
 
@@ -3562,28 +3562,30 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "transparent",
   },
-  quietSessionLabel: {
-    color: "rgba(255,255,255,0.62)",
+  quietSessionTitle: {
+    color: "#FFF8ED",
+    fontSize: 28,
+    lineHeight: 36,
+    fontWeight: "800",
+    textAlign: "center",
+    letterSpacing: -0.3,
+    marginTop: 24,
+  },
+  quietSessionKeeper: {
+    color: "rgba(255,248,237,0.74)",
     fontSize: 17,
     lineHeight: 24,
-    fontWeight: "800",
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-  },
-  quietTimerText: {
-    color: "rgba(255,255,255,0.88)",
-    fontSize: 42,
-    lineHeight: 52,
-    fontWeight: "800",
-    letterSpacing: -0.8,
-    marginTop: 18,
+    fontWeight: "700",
+    textAlign: "center",
+    marginTop: 10,
   },
   quietSessionSubtitle: {
-    color: "rgba(255,255,255,0.5)",
+    color: "rgba(255,248,237,0.52)",
     fontSize: 16,
     lineHeight: 23,
     fontWeight: "600",
-    marginTop: 14,
+    marginTop: 8,
+    textAlign: "center",
   },
   quietBottomArea: {
     alignItems: "center",
