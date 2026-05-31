@@ -101,6 +101,7 @@ type SanctuaryReveal = {
   sessionId: string;
   stage: number;
   stageChanged: boolean;
+  bookTitle: string;
   title: string;
   subtitle: string;
   sessionMinutes: string;
@@ -940,6 +941,7 @@ export default function HomeScreen() {
       sessionId: newSession.id,
       stage: updatedSanctuaryStageNumber,
       stageChanged: didSanctuaryStageChange,
+      bookTitle: title,
       title: revealCopy.title,
       subtitle: revealCopy.subtitle,
       sessionMinutes: sessionDuration,
@@ -1146,6 +1148,7 @@ export default function HomeScreen() {
       sessionId: newSession.id,
       stage: updatedSanctuaryStageNumber,
       stageChanged: didSanctuaryStageChange,
+      bookTitle: titleToSave,
       title: revealCopy.title,
       subtitle: revealCopy.subtitle,
       sessionMinutes: sessionDuration,
@@ -1227,7 +1230,12 @@ export default function HomeScreen() {
     ? "Your book is waiting."
     : "Your first book can live here.";
   const revealBookTitle =
-    bookTitle.trim() || manualLogBookTitle.trim() || currentBookTitle || latestSession?.title || "your book";
+    sanctuaryReveal?.bookTitle ||
+    bookTitle.trim() ||
+    manualLogBookTitle.trim() ||
+    currentBookTitle ||
+    latestSession?.title ||
+    "your book";
   const timeAwareGreeting = getTimeAwareGreeting();
   const diarySessions = [...recentSessions].sort(
     (first, second) => getSessionDateValue(second) - getSessionDateValue(first),
@@ -1446,6 +1454,8 @@ export default function HomeScreen() {
 
     case "bookInput": {
       const pendingDuration = formatDuration(pendingSessionSeconds / 60);
+      const canCompleteBook =
+        bookTitle.trim().length > 0 || currentBookTitle.trim().length > 0;
 
       return (
       <ThemedView style={styles.bookReturnScreen}>
@@ -1515,8 +1525,10 @@ export default function HomeScreen() {
               style={({ pressed }) => [
                 styles.bookCompletedToggle,
                 showBookCompletedInput && styles.bookCompletedToggleSelected,
+                !canCompleteBook && { opacity: 0.4 },
                 pressed && styles.buttonPressed,
               ]}
+              disabled={!canCompleteBook}
               onPress={() => {
                 setShowBookCompletedInput((value) => !value);
                 if (showBookCompletedInput) {
@@ -1588,9 +1600,16 @@ export default function HomeScreen() {
         <View style={styles.sessionGlowOne} />
         <View style={styles.sessionGlowTwo} />
 
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1 }}
+        >
         <ScrollView
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.closeSessionContent}
+          contentContainerStyle={[
+            styles.closeSessionContent,
+            { paddingBottom: insets.bottom + 80 },
+          ]}
         >
           <ThemedText style={styles.closeEyebrow}>Manual log</ThemedText>
           <ThemedText style={styles.closeTitle}>What did the time hold?</ThemedText>
@@ -1696,6 +1715,7 @@ export default function HomeScreen() {
             </Pressable>
           </View>
         </ScrollView>
+        </KeyboardAvoidingView>
       </ThemedView>
     );
     }
@@ -1717,6 +1737,12 @@ export default function HomeScreen() {
       );
       const reflectionPrompt =
         completedBookReflectionPrompts[completedBookPromptIndex];
+      const completedBookDaysLine =
+        daysCount === 1
+          ? "You read it today."
+          : `You read it across ${daysCount} days.`;
+      const completedBookSessionLabel =
+        completedBookMoment.sessionCount === 1 ? "SESSION" : "SESSIONS";
 
       return (
       <ThemedView style={styles.completedBookScreen}>
@@ -1781,7 +1807,7 @@ export default function HomeScreen() {
                 {completedBookMoment.sessionCount}
               </ThemedText>
               <ThemedText style={styles.completedBookStatLabel}>
-                SESSIONS
+                {completedBookSessionLabel}
               </ThemedText>
             </View>
             <View style={styles.completedBookStatDivider} />
@@ -1808,7 +1834,7 @@ export default function HomeScreen() {
             This book has a history with you now.
           </ThemedText>
           <ThemedText style={styles.completedBookSubline}>
-            {`You read it across ${daysCount} days.\nIt will stay in your reading life.`}
+            {`${completedBookDaysLine}\nIt will stay in your reading life.`}
           </ThemedText>
 
           <View style={styles.completedBookReflectionWrap}>
@@ -1879,19 +1905,30 @@ export default function HomeScreen() {
         <View pointerEvents="none" style={styles.bookReturnGlowTop} />
         <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
 
-        <Animated.View
-          style={[
-            styles.revealAnimatedShell,
-            {
-              opacity: revealOpacity,
-              transform: [
-                { translateY: revealTranslateY },
-                { scale: revealScale },
-              ],
-            },
-          ]}
+        <KeyboardAvoidingView
+          style={styles.completedBookKeyboardView}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
         >
-          <ScrollView contentContainerStyle={styles.bookRevealContent}>
+          <Animated.View
+            style={[
+              styles.revealAnimatedShell,
+              {
+                opacity: revealOpacity,
+                transform: [
+                  { translateY: revealTranslateY },
+                  { scale: revealScale },
+                ],
+              },
+            ]}
+          >
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+            contentContainerStyle={[
+              styles.bookRevealContent,
+              { paddingBottom: insets.bottom + 96 },
+            ]}
+          >
             <ThemedText style={styles.bookRevealEyebrow}>Session saved</ThemedText>
             <ThemedText style={styles.bookRevealTitle}>
               {sanctuaryReveal.title}
@@ -1931,6 +1968,8 @@ export default function HomeScreen() {
                   onChangeText={setSessionReflection}
                   style={styles.sessionReflectionInput}
                   multiline
+                  blurOnSubmit
+                  onSubmitEditing={Keyboard.dismiss}
                   textAlignVertical="top"
                 />
               </View>
@@ -1981,6 +2020,7 @@ export default function HomeScreen() {
             )}
           </ScrollView>
         </Animated.View>
+        </KeyboardAvoidingView>
       </ThemedView>
     );
     }
@@ -2334,7 +2374,7 @@ export default function HomeScreen() {
         <ThemedView style={styles.sessionsCard}>
           {recentSessions.length === 0 ? (
             <ThemedText style={styles.emptySessionsText}>
-              Start a session with any book or e-reader to begin your archive.
+              {"Your first session will appear here. Start reading when you're ready."}
             </ThemedText>
           ) : (
             visibleSessions.map((session, index) => {
@@ -2825,33 +2865,13 @@ const styles = StyleSheet.create({
     color: colors.mutedText,
     fontWeight: "600",
     marginTop: 6,
-  },
-  sanctuaryHero: {
-    borderRadius: 30,
-    overflow: "hidden",
-    backgroundColor: "#0B2A22",
-    borderWidth: 1,
-    borderColor: "rgba(23,56,38,0.10)",
-    ...cardShadow,
-    zIndex: 2,
-  },
-  sanctuaryHeroScene: {
+  },  sanctuaryHeroScene: {
     height: 186,
     backgroundColor: "#1B4234",
     overflow: "hidden",
     borderBottomWidth: 1,
     borderBottomColor: "rgba(255,248,237,0.08)",
-  },
-  sanctuaryHeroSkyGlow: {
-    position: "absolute",
-    top: -78,
-    left: -40,
-    right: -40,
-    height: 210,
-    borderRadius: 140,
-    backgroundColor: "rgba(255,248,237,0.08)",
-  },
-  sanctuaryHeroMoonGlow: {
+  },  sanctuaryHeroMoonGlow: {
     position: "absolute",
     top: 30,
     left: 42,
@@ -2859,17 +2879,7 @@ const styles = StyleSheet.create({
     height: 108,
     borderRadius: 54,
     backgroundColor: "rgba(247,195,107,0.14)",
-  },
-  sanctuaryHeroWindowGlow: {
-    position: "absolute",
-    top: 38,
-    left: 78,
-    right: 78,
-    height: 112,
-    borderRadius: 58,
-    backgroundColor: "rgba(247,195,107,0.48)",
-  },
-  sanctuaryHeroWindowFrame: {
+  },  sanctuaryHeroWindowFrame: {
     position: "absolute",
     top: 46,
     left: 96,
@@ -2878,17 +2888,7 @@ const styles = StyleSheet.create({
     borderRadius: 56,
     borderWidth: 2,
     borderColor: "rgba(255,248,237,0.34)",
-  },
-  sanctuaryHeroWindowDivider: {
-    position: "absolute",
-    top: 52,
-    alignSelf: "center",
-    width: 2,
-    height: 98,
-    borderRadius: 1,
-    backgroundColor: "rgba(255,248,237,0.28)",
-  },
-  sanctuaryHeroBackWallShelf: {
+  },  sanctuaryHeroBackWallShelf: {
     position: "absolute",
     top: 156,
     left: 34,
@@ -2896,16 +2896,7 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 999,
     backgroundColor: "rgba(106,70,59,0.26)",
-  },
-  sanctuaryHeroFloor: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 68,
-    backgroundColor: "rgba(184,144,104,0.64)",
-  },
-  sanctuaryHeroRug: {
+  },  sanctuaryHeroRug: {
     position: "absolute",
     left: 72,
     right: 72,
@@ -2913,19 +2904,7 @@ const styles = StyleSheet.create({
     height: 26,
     borderRadius: 999,
     backgroundColor: "rgba(201,133,104,0.62)",
-  },
-  sanctuaryHeroChair: {
-    position: "absolute",
-    left: 52,
-    bottom: 42,
-    width: 82,
-    height: 74,
-    borderRadius: 30,
-    backgroundColor: "rgba(106,70,59,0.82)",
-    borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.08)",
-  },
-  sanctuaryHeroBlanket: {
+  },  sanctuaryHeroBlanket: {
     position: "absolute",
     right: 8,
     bottom: 7,
@@ -2933,17 +2912,7 @@ const styles = StyleSheet.create({
     height: 39,
     borderRadius: 14,
     backgroundColor: "rgba(247,195,107,0.72)",
-  },
-  sanctuaryHeroSideTable: {
-    position: "absolute",
-    left: 148,
-    bottom: 42,
-    width: 38,
-    height: 46,
-    borderRadius: 12,
-    backgroundColor: "rgba(106,70,59,0.58)",
-  },
-  sanctuaryHeroPlantPot: {
+  },  sanctuaryHeroPlantPot: {
     position: "absolute",
     right: 72,
     bottom: 48,
@@ -2951,26 +2920,11 @@ const styles = StyleSheet.create({
     height: 26,
     borderRadius: 12,
     backgroundColor: "rgba(201,133,104,0.78)",
-  },
-  sanctuaryHeroLeaf: {
-    position: "absolute",
-    width: 29,
-    height: 42,
-    borderRadius: 22,
-    backgroundColor: "rgba(116,138,93,0.72)",
-  },
-  sanctuaryHeroLeafOne: {
+  },  sanctuaryHeroLeafOne: {
     right: 82,
     bottom: 72,
     transform: [{ rotate: "-24deg" }],
-  },
-  sanctuaryHeroLeafTwo: {
-    right: 62,
-    bottom: 76,
-    backgroundColor: "rgba(95,117,77,0.70)",
-    transform: [{ rotate: "25deg" }],
-  },
-  sanctuaryHeroQuietCorner: {
+  },  sanctuaryHeroQuietCorner: {
     position: "absolute",
     right: 40,
     bottom: 50,
@@ -2980,14 +2934,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(23,56,38,0.28)",
     alignItems: "center",
     justifyContent: "center",
-  },
-  sanctuaryHeroQuietLine: {
-    width: 44,
-    height: 2,
-    borderRadius: 1,
-    backgroundColor: "rgba(255,248,237,0.20)",
-  },
-  sanctuaryHeroStove: {
+  },  sanctuaryHeroStove: {
     position: "absolute",
     right: 42,
     bottom: 46,
@@ -3004,16 +2951,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.18,
     shadowRadius: 16,
     elevation: 5,
-  },
-  sanctuaryHeroStovePipe: {
-    position: "absolute",
-    top: -58,
-    width: 8,
-    height: 64,
-    borderRadius: 5,
-    backgroundColor: "#39413C",
-  },
-  sanctuaryHeroStoveTop: {
+  },  sanctuaryHeroStoveTop: {
     position: "absolute",
     top: -6,
     left: 13,
@@ -3021,17 +2959,7 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 5,
     backgroundColor: "#48514B",
-  },
-  sanctuaryHeroStoveHandle: {
-    position: "absolute",
-    top: 10,
-    right: 10,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "rgba(255,248,237,0.24)",
-  },
-  sanctuaryHeroStoveWindow: {
+  },  sanctuaryHeroStoveWindow: {
     width: 42,
     height: 26,
     borderRadius: 8,
@@ -3039,27 +2967,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
-  },
-  sanctuaryHeroFaintEmber: {
-    width: 18,
-    height: 7,
-    borderRadius: 999,
-    backgroundColor: "rgba(239,143,62,0.55)",
-  },
-  sanctuaryHeroFireGlow: {
+  },  sanctuaryHeroFireGlow: {
     position: "absolute",
     width: 44,
     height: 28,
     borderRadius: 15,
     backgroundColor: "rgba(239,143,62,0.72)",
-  },
-  sanctuaryHeroFireCore: {
-    width: 16,
-    height: 20,
-    borderRadius: 999,
-    backgroundColor: "#F7C36B",
-  },
-  sanctuaryHeroStoveLegLeft: {
+  },  sanctuaryHeroStoveLegLeft: {
     position: "absolute",
     left: 13,
     bottom: -8,
@@ -3067,42 +2981,18 @@ const styles = StyleSheet.create({
     height: 13,
     borderRadius: 3,
     backgroundColor: "#39413C",
-  },
-  sanctuaryHeroStoveLegRight: {
-    position: "absolute",
-    right: 13,
-    bottom: -8,
-    width: 8,
-    height: 13,
-    borderRadius: 3,
-    backgroundColor: "#39413C",
-  },
-  sanctuaryHeroBookStack: {
+  },  sanctuaryHeroBookStack: {
     position: "absolute",
     left: 34,
     bottom: 44,
     width: 56,
     gap: 4,
-  },
-  sanctuaryHeroBookOne: {
-    width: 50,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#F7C36B",
-  },
-  sanctuaryHeroBookTwo: {
+  },  sanctuaryHeroBookTwo: {
     width: 42,
     height: 8,
     borderRadius: 4,
     backgroundColor: "rgba(201,133,104,0.78)",
-  },
-  sanctuaryHeroBookThree: {
-    width: 54,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#FFF8ED",
-  },
-  sanctuaryHeroMug: {
+  },  sanctuaryHeroMug: {
     position: "absolute",
     left: 156,
     bottom: 92,
@@ -3110,18 +3000,7 @@ const styles = StyleSheet.create({
     height: 19,
     borderRadius: 10,
     backgroundColor: "#FFF8ED",
-  },
-  sanctuaryHeroMugHandle: {
-    position: "absolute",
-    left: 177,
-    bottom: 96,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    borderWidth: 2,
-    borderColor: "#FFF8ED",
-  },
-  sanctuaryHeroVine: {
+  },  sanctuaryHeroVine: {
     position: "absolute",
     top: 30,
     left: 38,
@@ -3129,18 +3008,7 @@ const styles = StyleSheet.create({
     height: 8,
     borderRadius: 999,
     backgroundColor: "rgba(116,138,93,0.58)",
-  },
-  sanctuaryHeroHangingLeafOne: {
-    position: "absolute",
-    top: 36,
-    right: 72,
-    width: 26,
-    height: 54,
-    borderRadius: 18,
-    backgroundColor: "rgba(116,138,93,0.66)",
-    transform: [{ rotate: "-14deg" }],
-  },
-  sanctuaryHeroHangingLeafTwo: {
+  },  sanctuaryHeroHangingLeafTwo: {
     position: "absolute",
     top: 42,
     left: 76,
@@ -3149,46 +3017,17 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     backgroundColor: "rgba(95,117,77,0.62)",
     transform: [{ rotate: "18deg" }],
-  },
-  sanctuaryHeroShelf: {
-    position: "absolute",
-    left: 40,
-    top: 100,
-    width: 102,
-    height: 42,
-    borderRadius: 10,
-    backgroundColor: "rgba(106,70,59,0.58)",
-    flexDirection: "row",
-    alignItems: "flex-end",
-    paddingHorizontal: 12,
-    paddingBottom: 9,
-    gap: 5,
-  },
-  sanctuaryHeroShelfBookOne: {
+  },  sanctuaryHeroShelfBookOne: {
     width: 10,
     height: 24,
     borderRadius: 2,
     backgroundColor: "#F7C36B",
-  },
-  sanctuaryHeroShelfBookTwo: {
-    width: 10,
-    height: 18,
-    borderRadius: 2,
-    backgroundColor: "#FFF8ED",
-  },
-  sanctuaryHeroShelfBookThree: {
+  },  sanctuaryHeroShelfBookThree: {
     width: 10,
     height: 30,
     borderRadius: 2,
     backgroundColor: "rgba(201,133,104,0.78)",
-  },
-  sanctuaryHeroShelfBookFour: {
-    width: 10,
-    height: 21,
-    borderRadius: 2,
-    backgroundColor: "rgba(116,138,93,0.72)",
-  },
-  sanctuaryHeroProgressPill: {
+  },  sanctuaryHeroProgressPill: {
     position: "absolute",
     top: 16,
     right: 16,
@@ -3199,31 +3038,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,248,237,0.28)",
     zIndex: 3,
-  },
-  sanctuaryHeroProgressText: {
-    color: "#173826",
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: "800",
-  },
-  sanctuaryHeroCopy: {
+  },  sanctuaryHeroCopy: {
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 17,
     backgroundColor: "#0B2A22",
     borderTopWidth: 1,
     borderTopColor: "rgba(255,248,237,0.10)",
-  },
-  sanctuaryHeroEyebrow: {
-    color: "rgba(255,248,237,0.72)",
-    fontSize: 11,
-    lineHeight: 16,
-    fontWeight: "800",
-    letterSpacing: 2,
-    textTransform: "uppercase",
-    marginBottom: 7,
-  },
-  sanctuaryHeroTitle: {
+  },  sanctuaryHeroTitle: {
     color: "#FFF8ED",
     fontSize: 30,
     lineHeight: 35,
@@ -3234,44 +3056,17 @@ const styles = StyleSheet.create({
       android: "serif",
       default: "serif",
     }),
-  },
-  sanctuaryHeroDivider: {
-    width: 52,
-    height: 1,
-    backgroundColor: "rgba(255,248,237,0.48)",
-    marginTop: 8,
-    marginBottom: 8,
-  },
-  sanctuaryHeroSubtitle: {
+  },  sanctuaryHeroSubtitle: {
     color: "rgba(255,248,237,0.78)",
     fontSize: 14,
     lineHeight: 20,
     fontWeight: "600",
-  },
-  sanctuaryMilestonePill: {
-    alignSelf: "flex-start",
-    backgroundColor: "rgba(255,248,237,0.075)",
-    borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.12)",
-    borderRadius: 999,
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    marginTop: 8,
-  },
-  sanctuaryMilestoneText: {
+  },  sanctuaryMilestoneText: {
     color: "rgba(255,248,237,0.82)",
     fontSize: 11,
     lineHeight: 16,
     fontWeight: "800",
-  },
-  sanctuaryHeroStatsRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 13,
-    backgroundColor: "transparent",
-    marginTop: 12,
-  },
-  sanctuaryHeroIconBadge: {
+  },  sanctuaryHeroIconBadge: {
     width: 34,
     height: 34,
     borderRadius: 17,
@@ -3286,51 +3081,23 @@ const styles = StyleSheet.create({
     fontSize: 19,
     lineHeight: 24,
     fontWeight: "800",
-  },
-  sanctuaryHeroStat: {
-    backgroundColor: "transparent",
-  },
-  sanctuaryHeroStatNumber: {
+  },  sanctuaryHeroStatNumber: {
     color: "#FFF8ED",
     fontSize: 19,
     lineHeight: 24,
     fontWeight: "700",
     letterSpacing: -0.35,
-  },
-  sanctuaryHeroStatLabel: {
-    color: "rgba(255,248,237,0.66)",
-    fontSize: 11,
-    lineHeight: 16,
-    fontWeight: "700",
-    marginTop: 1,
-  },
-  sanctuaryHeroStatDivider: {
+  },  sanctuaryHeroStatDivider: {
     width: 1,
     height: 32,
     backgroundColor: "rgba(255,248,237,0.18)",
-  },
-  sanctuaryCard: {
-    backgroundColor: "rgba(255,248,237,0.86)",
-    borderRadius: 30,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: "rgba(23,56,38,0.10)",
-    ...softCardShadow,
-    zIndex: 2,
-  },
-  sanctuaryHeaderRow: {
+  },  sanctuaryHeaderRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     justifyContent: "space-between",
     backgroundColor: "transparent",
     marginBottom: 10,
-  },
-  sanctuaryHeaderCopy: {
-    flex: 1,
-    backgroundColor: "transparent",
-    paddingRight: 12,
-  },
-  sanctuaryEyebrow: {
+  },  sanctuaryEyebrow: {
     color: "rgba(47,93,80,0.62)",
     fontSize: 12,
     lineHeight: 17,
@@ -3338,29 +3105,14 @@ const styles = StyleSheet.create({
     letterSpacing: 1.1,
     textTransform: "uppercase",
     marginBottom: 4,
-  },
-  sanctuaryTitle: {
-    color: "#173826",
-    fontSize: 21,
-    lineHeight: 26,
-    fontWeight: "900",
-    letterSpacing: -0.45,
-  },
-  sanctuaryStagePill: {
+  },  sanctuaryStagePill: {
     backgroundColor: "rgba(23,56,38,0.08)",
     borderRadius: 999,
     paddingVertical: 7,
     paddingHorizontal: 11,
     borderWidth: 1,
     borderColor: "rgba(23,56,38,0.08)",
-  },
-  sanctuaryStagePillText: {
-    color: "rgba(23,56,38,0.72)",
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: "900",
-  },
-  sanctuaryScene: {
+  },  sanctuaryScene: {
     height: 210,
     borderRadius: 26,
     backgroundColor: "#1F472F",
@@ -3368,17 +3120,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     borderWidth: 1,
     borderColor: "rgba(23,56,38,0.14)",
-  },
-  sanctuaryWindowGlow: {
-    position: "absolute",
-    top: 24,
-    left: 48,
-    right: 48,
-    height: 112,
-    borderRadius: 62,
-    backgroundColor: "rgba(247,195,107,0.72)",
-  },
-  sanctuaryHearthAura: {
+  },  sanctuaryHearthAura: {
     position: "absolute",
     right: 10,
     bottom: 18,
@@ -3386,18 +3128,7 @@ const styles = StyleSheet.create({
     height: 112,
     borderRadius: 56,
     backgroundColor: "rgba(239,143,62,0.20)",
-  },
-  sanctuaryWindowFrame: {
-    position: "absolute",
-    top: 31,
-    left: 68,
-    right: 68,
-    height: 112,
-    borderRadius: 56,
-    borderWidth: 2,
-    borderColor: "rgba(255,248,237,0.5)",
-  },
-  sanctuaryWindowDivider: {
+  },  sanctuaryWindowDivider: {
     position: "absolute",
     top: 35,
     alignSelf: "center",
@@ -3405,16 +3136,7 @@ const styles = StyleSheet.create({
     height: 102,
     borderRadius: 1,
     backgroundColor: "rgba(255,248,237,0.44)",
-  },
-  sanctuaryFloor: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 82,
-    backgroundColor: "rgba(184,144,104,0.82)",
-  },
-  sanctuaryRug: {
+  },  sanctuaryRug: {
     position: "absolute",
     left: 64,
     right: 64,
@@ -3422,17 +3144,7 @@ const styles = StyleSheet.create({
     height: 30,
     borderRadius: 20,
     backgroundColor: "rgba(201,133,104,0.88)",
-  },
-  sanctuaryChair: {
-    position: "absolute",
-    left: 74,
-    bottom: 46,
-    width: 84,
-    height: 76,
-    borderRadius: 24,
-    backgroundColor: "rgba(106,70,59,0.82)",
-  },
-  sanctuaryBlanket: {
+  },  sanctuaryBlanket: {
     position: "absolute",
     right: 10,
     bottom: 8,
@@ -3440,17 +3152,7 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 12,
     backgroundColor: "rgba(247,195,107,0.78)",
-  },
-  sanctuaryPlantPot: {
-    position: "absolute",
-    right: 74,
-    bottom: 54,
-    width: 36,
-    height: 28,
-    borderRadius: 10,
-    backgroundColor: "rgba(201,133,104,0.78)",
-  },
-  sanctuaryLeaf: {
+  },  sanctuaryLeaf: {
     position: "absolute",
     right: 78,
     bottom: 78,
@@ -3458,21 +3160,12 @@ const styles = StyleSheet.create({
     height: 42,
     borderRadius: 20,
     backgroundColor: "rgba(116,138,93,0.72)",
-  },
-  sanctuaryLeafOne: {
-    transform: [{ rotate: "-22deg" }],
-  },
-  sanctuaryLeafTwo: {
+  },  sanctuaryLeafTwo: {
     right: 94,
     bottom: 82,
     backgroundColor: "rgba(95,117,77,0.70)",
     transform: [{ rotate: "24deg" }],
-  },
-  sanctuaryLeafGrown: {
-    height: 55,
-    bottom: 82,
-  },
-  unlitCorner: {
+  },  unlitCorner: {
     position: "absolute",
     right: 38,
     bottom: 56,
@@ -3482,14 +3175,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(23,56,38,0.20)",
     alignItems: "center",
     justifyContent: "center",
-  },
-  unlitCornerLine: {
-    width: 42,
-    height: 2,
-    borderRadius: 1,
-    backgroundColor: "rgba(255,248,237,0.18)",
-  },
-  ironStove: {
+  },  ironStove: {
     position: "absolute",
     right: 32,
     bottom: 54,
@@ -3504,17 +3190,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.22,
     shadowRadius: 12,
     elevation: 4,
-  },
-  ironStovePipe: {
-    position: "absolute",
-    top: -60,
-    left: 32,
-    width: 8,
-    height: 64,
-    borderRadius: 4,
-    backgroundColor: "#39413C",
-  },
-  ironStoveTop: {
+  },  ironStoveTop: {
     position: "absolute",
     top: -5,
     left: 12,
@@ -3522,17 +3198,7 @@ const styles = StyleSheet.create({
     height: 7,
     borderRadius: 4,
     backgroundColor: "#48514B",
-  },
-  ironStoveHandle: {
-    position: "absolute",
-    top: 8,
-    right: 9,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "rgba(255,248,237,0.22)",
-  },
-  ironStoveWindow: {
+  },  ironStoveWindow: {
     position: "absolute",
     top: 13,
     left: 14,
@@ -3543,27 +3209,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     overflow: "hidden",
-  },
-  faintEmber: {
-    width: 18,
-    height: 6,
-    borderRadius: 6,
-    backgroundColor: "rgba(239,143,62,0.5)",
-  },
-  fireGlow: {
+  },  fireGlow: {
     position: "absolute",
     width: 44,
     height: 26,
     borderRadius: 15,
     backgroundColor: "rgba(239,143,62,0.88)",
-  },
-  fireIcon: {
-    color: "#F7C36B",
-    fontSize: 18,
-    lineHeight: 22,
-    fontWeight: "900",
-  },
-  ironStoveLegLeft: {
+  },  ironStoveLegLeft: {
     position: "absolute",
     left: 12,
     bottom: -8,
@@ -3571,17 +3223,7 @@ const styles = StyleSheet.create({
     height: 12,
     borderRadius: 3,
     backgroundColor: "#39413C",
-  },
-  ironStoveLegRight: {
-    position: "absolute",
-    right: 12,
-    bottom: -8,
-    width: 8,
-    height: 12,
-    borderRadius: 3,
-    backgroundColor: "#39413C",
-  },
-  sanctuaryBookStack: {
+  },  sanctuaryBookStack: {
     position: "absolute",
     left: 28,
     bottom: 54,
@@ -3589,28 +3231,13 @@ const styles = StyleSheet.create({
     height: 28,
     justifyContent: "flex-end",
     backgroundColor: "transparent",
-  },
-  sanctuaryBookOne: {
-    width: 44,
-    height: 7,
-    borderRadius: 3,
-    backgroundColor: "#F7C36B",
-  },
-  sanctuaryBookTwo: {
+  },  sanctuaryBookTwo: {
     width: 36,
     height: 7,
     borderRadius: 3,
     backgroundColor: "rgba(201,133,104,0.78)",
     marginBottom: 3,
-  },
-  sanctuaryBookThree: {
-    width: 42,
-    height: 7,
-    borderRadius: 3,
-    backgroundColor: "#FFF8ED",
-    marginBottom: 3,
-  },
-  sanctuaryMug: {
+  },  sanctuaryMug: {
     position: "absolute",
     left: 166,
     bottom: 56,
@@ -3618,49 +3245,17 @@ const styles = StyleSheet.create({
     height: 18,
     borderRadius: 9,
     backgroundColor: "#FFF8ED",
-  },
-  sanctuaryShelf: {
-    position: "absolute",
-    left: 36,
-    top: 74,
-    width: 92,
-    height: 42,
-    borderRadius: 8,
-    backgroundColor: "rgba(106,70,59,0.78)",
-    flexDirection: "row",
-    alignItems: "flex-end",
-    paddingHorizontal: 9,
-    paddingBottom: 8,
-    gap: 5,
-  },
-  sanctuaryShelfBookOne: {
+  },  sanctuaryShelfBookOne: {
     width: 10,
     height: 24,
     borderRadius: 2,
     backgroundColor: "#F7C36B",
-  },
-  sanctuaryShelfBookTwo: {
-    width: 10,
-    height: 18,
-    borderRadius: 2,
-    backgroundColor: "#FFF8ED",
-  },
-  sanctuaryShelfBookThree: {
+  },  sanctuaryShelfBookThree: {
     width: 10,
     height: 28,
     borderRadius: 2,
     backgroundColor: "rgba(201,133,104,0.78)",
-  },
-  sanctuaryVine: {
-    position: "absolute",
-    top: 42,
-    left: 34,
-    right: 44,
-    height: 9,
-    borderRadius: 999,
-    backgroundColor: "rgba(116,138,93,0.72)",
-  },
-  sanctuaryHangingLeaf: {
+  },  sanctuaryHangingLeaf: {
     position: "absolute",
     top: 48,
     right: 54,
@@ -3669,15 +3264,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: "rgba(116,138,93,0.66)",
     transform: [{ rotate: "-12deg" }],
-  },
-  sanctuaryMainCopy: {
-    color: "#173826",
-    fontSize: 17,
-    lineHeight: 23,
-    fontWeight: "900",
-    letterSpacing: -0.2,
-  },
-  sanctuarySubCopy: {
+  },  sanctuarySubCopy: {
     color: "rgba(31,41,51,0.64)",
     fontSize: 14,
     lineHeight: 21,
@@ -3735,16 +3322,7 @@ const styles = StyleSheet.create({
     fontSize: 22,
     lineHeight: 26,
     fontWeight: "600",
-  },
-  startHeroSubtitle: {
-    color: "rgba(255,255,255,0.66)",
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 3,
-    fontWeight: "600",
-    flexShrink: 1,
-  },
-  manualLogButton: {
+  },  manualLogButton: {
     backgroundColor: "rgba(255,255,255,0.46)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.07)",
@@ -3773,48 +3351,15 @@ const styles = StyleSheet.create({
     fontSize: 28,
     lineHeight: 30,
     fontWeight: "300",
-  },
-  manualLogButtonSubtext: {
-    color: "rgba(107,114,128,0.72)",
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "600",
-    textAlign: "center",
-    marginTop: 2,
-  },
-  identityCard: {
-    backgroundColor: colors.card,
-    borderRadius: 22,
-    paddingVertical: 20,
-    paddingHorizontal: 20,
-    flexDirection: "row",
-    alignItems: "center",
-    ...cardShadow,
-  },
-  identityColumn: {
+  },  identityColumn: {
     flex: 1,
     backgroundColor: colors.card,
-  },
-  identityDivider: {
-    width: 1,
-    alignSelf: "stretch",
-    backgroundColor: "#ECECEC",
-    marginHorizontal: 16,
-  },
-  identityTitle: {
+  },  identityTitle: {
     fontSize: 19,
     lineHeight: 26,
     fontWeight: "900",
     color: colors.text,
-  },
-  identitySubtext: {
-    fontSize: 14,
-    lineHeight: 20,
-    color: colors.accent,
-    fontWeight: "800",
-    marginTop: 8,
-  },
-  identityLabel: {
+  },  identityLabel: {
     fontSize: 14,
     lineHeight: 20,
     color: colors.mutedText,
@@ -3826,28 +3371,10 @@ const styles = StyleSheet.create({
     lineHeight: 23,
     color: colors.text,
     fontWeight: "900",
-  },
-  currentBookLabelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: colors.card,
-    marginBottom: 7,
-  },
-  currentBookIcon: {
+  },  currentBookIcon: {
     fontSize: 16,
     lineHeight: 20,
-  },
-  ritualCopyBlock: {
-    minHeight: 128,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "transparent",
-    marginTop: 16,
-    marginBottom: 18,
-    zIndex: 2,
-  },
-  mistLayerBack: {
+  },  mistLayerBack: {
     position: "absolute",
     left: -40,
     right: -40,
@@ -3856,35 +3383,13 @@ const styles = StyleSheet.create({
     borderRadius: 80,
     backgroundColor: "rgba(47,93,80,0.045)",
     transform: [{ scaleX: 1.15 }],
-  },
-  mistLayerFront: {
-    position: "absolute",
-    left: -22,
-    right: -22,
-    bottom: -10,
-    height: 86,
-    borderRadius: 70,
-    backgroundColor: "rgba(47,93,80,0.06)",
-    transform: [{ scaleX: 1.08 }],
-  },
-  treeLine: {
+  },  treeLine: {
     position: "absolute",
     bottom: 22,
     flexDirection: "row",
     gap: 12,
     opacity: 0.28,
-  },
-  treePeak: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 18,
-    borderRightWidth: 18,
-    borderBottomWidth: 44,
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-    borderBottomColor: colors.accent,
-  },
-  treePeakSmall: {
+  },  treePeakSmall: {
     width: 0,
     height: 0,
     borderLeftWidth: 14,
@@ -3894,28 +3399,12 @@ const styles = StyleSheet.create({
     borderRightColor: "transparent",
     borderBottomColor: colors.accent,
     marginTop: 9,
-  },
-  ritualLine: {
-    color: "rgba(47,93,80,0.62)",
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: "500",
-    textAlign: "center",
-    letterSpacing: -0.05,
-    zIndex: 2,
-  },
-  ritualDividerRow: {
+  },  ritualDividerRow: {
     flexDirection: "row",
     alignItems: "center",
     marginTop: 15,
     zIndex: 2,
-  },
-  ritualDivider: {
-    width: 44,
-    height: 1,
-    backgroundColor: "rgba(47,93,80,0.12)",
-  },
-  ritualLeaf: {
+  },  ritualLeaf: {
     color: colors.accent,
     fontSize: 18,
     lineHeight: 22,
@@ -3934,54 +3423,21 @@ const styles = StyleSheet.create({
     color: colors.success,
     fontWeight: "900",
     textAlign: "center",
-  },
-  bookInputContainer: {
-    backgroundColor: colors.card,
-    borderRadius: 24,
-    padding: 18,
-    gap: 12,
-    ...cardShadow,
-  },
-  bookInputLabel: {
+  },  bookInputLabel: {
     fontSize: 17,
     lineHeight: 24,
     fontWeight: "800",
     color: colors.text,
-  },
-  bookInput: {
-    backgroundColor: "#F3F4F6",
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 16,
-    color: colors.text,
-  },
-  bookButtonRow: {
+  },  bookButtonRow: {
     flexDirection: "row",
     gap: 10,
     backgroundColor: colors.card,
-  },
-  secondaryButton: {
-    flex: 1,
-    backgroundColor: colors.softAccent,
-    paddingVertical: 13,
-    borderRadius: 14,
-    alignItems: "center",
-  },
-  secondaryButtonText: {
+  },  secondaryButtonText: {
     color: colors.accent,
     fontSize: 16,
     lineHeight: 22,
     fontWeight: "800",
-  },
-  saveBookButton: {
-    flex: 1,
-    backgroundColor: colors.accent,
-    paddingVertical: 13,
-    borderRadius: 14,
-    alignItems: "center",
-  },
-  saveBookButtonText: {
+  },  saveBookButtonText: {
     color: "#FFFFFF",
     fontSize: 16,
     lineHeight: 22,
