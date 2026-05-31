@@ -21,7 +21,6 @@ import { formatDuration } from "@/utils/formatDuration";
 const SECONDS_KEY = "todaysReadingSeconds";
 const DATE_KEY = "lastReadDate";
 const LIFETIME_SECONDS_KEY = "lifetimeReadingSeconds";
-const TOTAL_DAYS_READ_KEY = "totalDaysRead";
 const SESSIONS_KEY = "readingSessions";
 const TOTAL_COMPLETED_SESSIONS_KEY = "totalCompletedSessions";
 const CURRENT_BOOK_KEY = "currentBookTitle";
@@ -50,10 +49,9 @@ type ReadingSession = {
   id: string;
   title: string;
   minutes: string;
-  note?: string;
   reflection?: string | null;
+  note?: string;
   createdAt?: string;
-  date?: string;
   source?: "timed" | "logged";
 };
 
@@ -63,7 +61,31 @@ type CompletedBookReview = {
   review: string;
   completedAt: string;
   sessionMinutes: string;
+  totalBookMinutes?: string;
+  sessionCount?: number;
 };
+
+type CompletedBookMoment = {
+  sessionId: string;
+  title: string;
+  sessionMinutes: string;
+  totalBookMinutes: string;
+  sessionCount: number;
+};
+
+type Screen =
+  | "loading"
+  | "welcome"
+  | "home"
+  | "ritual"
+  | "active"
+  | "closeTransition"
+  | "bookInput"
+  | "manualLog"
+  | "completedBook"
+  | "reveal"
+  | "diary"
+  | "finishedBooks";
 
 type SanctuaryStage = {
   stage: number;
@@ -80,6 +102,7 @@ type SanctuaryReveal = {
   subtitle: string;
   sessionMinutes: string;
   ctaText: string;
+  source: "timed" | "logged";
 };
 
 const sanctuaryStages: SanctuaryStage[] = [
@@ -113,6 +136,14 @@ const sanctuaryStages: SanctuaryStage[] = [
     subtitle: "Your reading life has a steady light in it.",
     shortLabel: "Steady Light",
   },
+];
+
+const readingRitualLines = [
+  "The book is waiting.",
+  "Take your time.",
+  "You're here.",
+  "This is enough.",
+  "The rest can wait.",
 ];
 
 function getSanctuaryStage(totalSessions: number, totalMinutes: number) {
@@ -195,12 +226,70 @@ function formatSessionTimestamp(createdAt?: string, fallbackDate?: string) {
   return `${sessionDate.toLocaleDateString()} • ${time}`;
 }
 
+function getSessionDateValue(session: ReadingSession) {
+  const legacyDate = (session as ReadingSession & { date?: string }).date;
+  const sessionTime = session.createdAt ?? legacyDate;
+  const timestamp = sessionTime ? new Date(sessionTime).getTime() : Number.NaN;
+
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function formatDiaryDayHeader(session: ReadingSession) {
+  const timestamp = getSessionDateValue(session);
+  const sessionDate = timestamp > 0 ? new Date(timestamp) : new Date();
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+
+  if (sessionDate.toDateString() === today.toDateString()) {
+    return "Today";
+  }
+
+  if (sessionDate.toDateString() === yesterday.toDateString()) {
+    return "Yesterday";
+  }
+
+  return sessionDate.toLocaleDateString([], {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+function getSessionNote(session: ReadingSession): string {
+  return (session.reflection ?? session.note ?? "").trim();
+}
+
+function getBookReadingStats(title: string, sessions: ReadingSession[]) {
+  const normalizedTitle = title.trim().toLowerCase();
+  const bookSessions = sessions.filter(
+    (session) => session.title.trim().toLowerCase() === normalizedTitle,
+  );
+  const totalMinutes = bookSessions.reduce(
+    (sum, session) => sum + Number(session.minutes || 0),
+    0,
+  );
+
+  return {
+    sessionCount: bookSessions.length,
+    totalMinutes,
+  };
+}
+
+function getTimeAwareGreeting() {
+  const hour = new Date().getHours();
+
+  if (hour < 12) return "Good morning";
+  if (hour < 17) return "Good afternoon";
+  if (hour >= 22) return "Good night";
+  return "Good evening";
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [isReading, setIsReading] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [lifetimeSeconds, setLifetimeSeconds] = useState(0);
-  const [totalDaysRead, setTotalDaysRead] = useState(0);
   const [lastReadDate, setLastReadDate] = useState<string | null>(null);
   const [sessionMessage, setSessionMessage] = useState<string | null>(null);
   const [sessionStartSeconds, setSessionStartSeconds] = useState(0);
@@ -210,16 +299,17 @@ export default function HomeScreen() {
     number | null
   >(null);
   const [pendingSessionSeconds, setPendingSessionSeconds] = useState(0);
+  const [screen, setScreen] = useState<Screen>("loading");
   const [isLoaded, setIsLoaded] = useState(false);
-  const [showWelcomeScreen, setShowWelcomeScreen] = useState(false);
   const [bookTitle, setBookTitle] = useState("");
   const [currentBookTitle, setCurrentBookTitle] = useState("");
-  const [showBookInput, setShowBookInput] = useState(false);
   const [showBookCompletedInput, setShowBookCompletedInput] = useState(false);
   const [completedBookReview, setCompletedBookReview] = useState("");
-  const [showCloseSessionTransition, setShowCloseSessionTransition] =
-    useState(false);
-  const [showManualLogInput, setShowManualLogInput] = useState(false);
+  const [completedBookMoment, setCompletedBookMoment] =
+    useState<CompletedBookMoment | null>(null);
+  const [completedBooks, setCompletedBooks] = useState<CompletedBookReview[]>(
+    [],
+  );
   const [manualLogMinutes, setManualLogMinutes] = useState("30");
   const [manualLogBookTitle, setManualLogBookTitle] = useState("");
   const [manualLogError, setManualLogError] = useState<string | null>(null);
@@ -228,16 +318,17 @@ export default function HomeScreen() {
   const [sanctuaryReveal, setSanctuaryReveal] =
     useState<SanctuaryReveal | null>(null);
   const [sessionReflection, setSessionReflection] = useState("");
-  const [showRitualScreen, setShowRitualScreen] = useState(false);
-  const [ritualCountdownText, setRitualCountdownText] = useState("3");
+  const [ritualLineText, setRitualLineText] = useState(readingRitualLines[0]);
   const [manualLogNote, setManualLogNote] = useState("");
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ritualOpacity = useRef(new Animated.Value(0)).current;
   const ritualScale = useRef(new Animated.Value(0.98)).current;
-  const ritualCountdownOpacity = useRef(new Animated.Value(0)).current;
-  const ritualCountdownScale = useRef(new Animated.Value(0.92)).current;
+  const ritualLineOpacity = useRef(new Animated.Value(0)).current;
+  const ritualLineTranslateY = useRef(new Animated.Value(8)).current;
   const ritualBreath = useRef(new Animated.Value(0)).current;
+  const activeSessionOpacity = useRef(new Animated.Value(0)).current;
+  const activeSessionTranslateY = useRef(new Animated.Value(8)).current;
   const closeTransitionOpacity = useRef(new Animated.Value(0)).current;
   const closeTransitionScale = useRef(new Animated.Value(0.97)).current;
   const closeTransitionTranslateY = useRef(new Animated.Value(12)).current;
@@ -247,55 +338,16 @@ export default function HomeScreen() {
   const revealSceneScale = useRef(new Animated.Value(0.98)).current;
 
   useEffect(() => {
-    if (!showRitualScreen) return;
+    if (screen !== "ritual") return;
 
     ritualOpacity.setValue(0);
     ritualScale.setValue(0.98);
-    ritualCountdownOpacity.setValue(0);
-    ritualCountdownScale.setValue(0.92);
+    ritualLineOpacity.setValue(0);
+    ritualLineTranslateY.setValue(8);
     ritualBreath.setValue(0);
-    setRitualCountdownText("3");
-
-    const timers: ReturnType<typeof setTimeout>[] = [];
-
-    const pulseCountdown = () => {
-      ritualCountdownOpacity.setValue(0);
-      ritualCountdownScale.setValue(0.92);
-
-      Animated.parallel([
-        Animated.timing(ritualCountdownOpacity, {
-          toValue: 1,
-          duration: 240,
-          useNativeDriver: true,
-        }),
-        Animated.sequence([
-          Animated.timing(ritualCountdownScale, {
-            toValue: 1.04,
-            duration: 260,
-            useNativeDriver: true,
-          }),
-          Animated.timing(ritualCountdownScale, {
-            toValue: 1,
-            duration: 360,
-            useNativeDriver: true,
-          }),
-        ]),
-      ]).start();
-    };
-
-    const scheduleCountdown = (
-      label: string,
-      delay: number,
-      feedback: Haptics.ImpactFeedbackStyle = Haptics.ImpactFeedbackStyle.Light,
-    ) => {
-      timers.push(
-        setTimeout(() => {
-          setRitualCountdownText(label);
-          pulseCountdown();
-          Haptics.impactAsync(feedback);
-        }, delay),
-      );
-    };
+    setRitualLineText(
+      readingRitualLines[Math.floor(Math.random() * readingRitualLines.length)],
+    );
 
     const breathAnimation = Animated.loop(
       Animated.sequence([
@@ -316,51 +368,87 @@ export default function HomeScreen() {
       Animated.parallel([
         Animated.timing(ritualOpacity, {
           toValue: 1,
-          duration: 620,
+          duration: 560,
           useNativeDriver: true,
         }),
         Animated.timing(ritualScale, {
           toValue: 1,
-          duration: 850,
+          duration: 760,
+          useNativeDriver: true,
+        }),
+        Animated.timing(ritualLineOpacity, {
+          toValue: 1,
+          duration: 720,
+          useNativeDriver: true,
+        }),
+        Animated.timing(ritualLineTranslateY, {
+          toValue: 0,
+          duration: 720,
           useNativeDriver: true,
         }),
       ]),
-      Animated.delay(3150),
-      Animated.timing(ritualOpacity, {
-        toValue: 0,
-        duration: 620,
-        useNativeDriver: true,
-      }),
+      Animated.delay(1650),
+      Animated.parallel([
+        Animated.timing(ritualOpacity, {
+          toValue: 0,
+          duration: 520,
+          useNativeDriver: true,
+        }),
+        Animated.timing(ritualLineOpacity, {
+          toValue: 0,
+          duration: 420,
+          useNativeDriver: true,
+        }),
+      ]),
     ]);
 
     breathAnimation.start();
-    scheduleCountdown("3", 220);
-    scheduleCountdown("2", 1040);
-    scheduleCountdown("1", 1860);
-    scheduleCountdown("Start", 2700, Haptics.ImpactFeedbackStyle.Medium);
 
     animation.start(({ finished }) => {
       if (finished) {
-        setShowRitualScreen(false);
+        setScreen("active");
       }
     });
 
     return () => {
       animation.stop();
       breathAnimation.stop();
-      timers.forEach(clearTimeout);
     };
   }, [
     ritualBreath,
-    ritualCountdownOpacity,
-    ritualCountdownScale,
+    ritualLineOpacity,
+    ritualLineTranslateY,
     ritualOpacity,
     ritualScale,
-    showRitualScreen,
+    screen,
   ]);
 
   useEffect(() => {
-    if (!showCloseSessionTransition) return;
+    if (screen !== "active") return;
+
+    activeSessionOpacity.setValue(0);
+    activeSessionTranslateY.setValue(8);
+
+    Animated.parallel([
+      Animated.timing(activeSessionOpacity, {
+        toValue: 1,
+        duration: 520,
+        useNativeDriver: true,
+      }),
+      Animated.timing(activeSessionTranslateY, {
+        toValue: 0,
+        duration: 620,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [
+    activeSessionOpacity,
+    activeSessionTranslateY,
+    screen,
+  ]);
+
+  useEffect(() => {
+    if (screen !== "closeTransition") return;
 
     closeTransitionOpacity.setValue(0);
     closeTransitionScale.setValue(0.97);
@@ -396,8 +484,7 @@ export default function HomeScreen() {
 
     animation.start(({ finished }) => {
       if (finished) {
-        setShowCloseSessionTransition(false);
-        setShowBookInput(true);
+        setScreen("bookInput");
       }
     });
 
@@ -408,11 +495,11 @@ export default function HomeScreen() {
     closeTransitionOpacity,
     closeTransitionScale,
     closeTransitionTranslateY,
-    showCloseSessionTransition,
+    screen,
   ]);
 
   useEffect(() => {
-    if (!sanctuaryReveal) return;
+    if (screen !== "reveal" || !sanctuaryReveal) return;
 
     revealOpacity.setValue(0);
     revealScale.setValue(0.96);
@@ -460,20 +547,24 @@ export default function HomeScreen() {
     revealSceneScale,
     revealTranslateY,
     sanctuaryReveal,
+    screen,
   ]);
 
   useEffect(() => {
     const loadSavedData = async () => {
+      let nextScreen: Screen = "home";
+
       try {
         const savedSeconds = await AsyncStorage.getItem(SECONDS_KEY);
         const savedDate = await AsyncStorage.getItem(DATE_KEY);
         const savedLifetimeSeconds =
           await AsyncStorage.getItem(LIFETIME_SECONDS_KEY);
-        const savedTotalDaysRead =
-          await AsyncStorage.getItem(TOTAL_DAYS_READ_KEY);
         const savedSessions = await AsyncStorage.getItem(SESSIONS_KEY);
         const savedTotalCompletedSessions = await AsyncStorage.getItem(
           TOTAL_COMPLETED_SESSIONS_KEY,
+        );
+        const savedCompletedBooks = await AsyncStorage.getItem(
+          COMPLETED_BOOKS_KEY,
         );
         const savedCurrentBook = await AsyncStorage.getItem(CURRENT_BOOK_KEY);
         const savedHasSeenWelcome = await AsyncStorage.getItem(HAS_SEEN_WELCOME_KEY);
@@ -497,23 +588,50 @@ export default function HomeScreen() {
 
         if (savedDate !== null) setLastReadDate(savedDate);
         setLifetimeSeconds(savedLifetimeTotalSeconds);
-        if (savedTotalDaysRead !== null)
-          setTotalDaysRead(Number(savedTotalDaysRead));
         if (savedSessions !== null) {
-          const parsedSessions = JSON.parse(savedSessions);
-          setRecentSessions(parsedSessions);
+          const parsedSessions: ReadingSession[] = JSON.parse(savedSessions);
+          let shouldPersistMigratedSessions = false;
+          const migratedSessions = parsedSessions.map((session) => {
+            if (session.note && !session.reflection) {
+              shouldPersistMigratedSessions = true;
+              return { ...session, reflection: session.note };
+            }
+
+            return session;
+          });
+
+          setRecentSessions(migratedSessions);
+
+          if (shouldPersistMigratedSessions) {
+            await AsyncStorage.setItem(
+              SESSIONS_KEY,
+              JSON.stringify(migratedSessions),
+            );
+          }
 
           if (savedTotalCompletedSessions !== null) {
             setTotalCompletedSessions(Number(savedTotalCompletedSessions));
           } else {
-            setTotalCompletedSessions(parsedSessions.length);
+            setTotalCompletedSessions(migratedSessions.length);
           }
         } else if (savedTotalCompletedSessions !== null) {
           setTotalCompletedSessions(Number(savedTotalCompletedSessions));
         }
 
+        if (savedCompletedBooks !== null) {
+          const parsedCompletedBooks: CompletedBookReview[] =
+            JSON.parse(savedCompletedBooks);
+          setCompletedBooks(
+            [...parsedCompletedBooks].sort(
+              (first, second) =>
+                new Date(second.completedAt).getTime() -
+                new Date(first.completedAt).getTime(),
+            ),
+          );
+        }
+
         if (savedHasSeenWelcome !== "true" && savedActiveSessionStartTime === null) {
-          setShowWelcomeScreen(true);
+          nextScreen = "welcome";
         }
 
         if (savedActiveSessionStartTime !== null) {
@@ -536,6 +654,7 @@ export default function HomeScreen() {
             setSeconds(restoredTodayStartSeconds + elapsed);
             setLifetimeSeconds(restoredLifetimeStartSeconds + elapsed);
             setIsReading(true);
+            nextScreen = "active";
           }
         }
 
@@ -544,8 +663,9 @@ export default function HomeScreen() {
           setBookTitle(savedCurrentBook);
         }
       } catch (error) {
-        console.log("Failed to load Rouse data:", error);
+        console.log("Failed to load Rousd data:", error);
       } finally {
+        setScreen(nextScreen);
         setIsLoaded(true);
       }
     };
@@ -625,17 +745,13 @@ export default function HomeScreen() {
     sessionStartSeconds,
   ]);
 
-  const updateReadDayIfNeeded = async () => {
+  const persistTodayDateIfNeeded = async () => {
     const today = getTodayDateString();
 
     if (lastReadDate === today) return;
 
-    const newTotalDaysRead = totalDaysRead + 1;
-
-    setTotalDaysRead(newTotalDaysRead);
     setLastReadDate(today);
 
-    await AsyncStorage.setItem(TOTAL_DAYS_READ_KEY, String(newTotalDaysRead));
     await AsyncStorage.setItem(DATE_KEY, today);
   };
 
@@ -643,7 +759,7 @@ export default function HomeScreen() {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     if (!isReading) {
-      await updateReadDayIfNeeded();
+      await persistTodayDateIfNeeded();
 
       const now = Date.now();
 
@@ -653,15 +769,13 @@ export default function HomeScreen() {
       setPendingSessionSeconds(0);
       setSessionMessage(null);
       setSanctuaryReveal(null);
+      setCompletedBookMoment(null);
       setSessionReflection("");
       setBookTitle(currentBookTitle);
       setShowBookCompletedInput(false);
       setCompletedBookReview("");
-      setShowBookInput(false);
-      setShowCloseSessionTransition(false);
-      setShowManualLogInput(false);
-      setShowRitualScreen(true);
       setIsReading(true);
+      setScreen("ritual");
 
       await AsyncStorage.multiSet([
         [ACTIVE_SESSION_START_KEY, String(now)],
@@ -678,9 +792,11 @@ export default function HomeScreen() {
       setSeconds(updatedTodaySeconds);
       setLifetimeSeconds(updatedLifetimeSeconds);
       setPendingSessionSeconds(sessionSeconds);
-      setShowRitualScreen(false);
+      setBookTitle(currentBookTitle);
+      setSessionMessage(`+${sessionDuration} added`);
       setIsReading(false);
       setActiveSessionStartTime(null);
+      setScreen("closeTransition");
 
       await AsyncStorage.multiSet([
         [SECONDS_KEY, String(updatedTodaySeconds)],
@@ -691,10 +807,6 @@ export default function HomeScreen() {
         ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
         ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
       ]);
-
-      setBookTitle(currentBookTitle);
-      setShowCloseSessionTransition(true);
-      setSessionMessage(`+${sessionDuration} added`);
     }
   };
 
@@ -711,7 +823,7 @@ export default function HomeScreen() {
       source: "timed",
     };
 
-    const updatedSessions = [newSession, ...recentSessions].slice(0, 5);
+    const updatedSessions = [newSession, ...recentSessions];
 
     const updatedTotalCompletedSessions = totalCompletedSessions + 1;
     const previousLifetimeMinutes = Math.max(
@@ -753,19 +865,36 @@ export default function HomeScreen() {
       subtitle: revealCopy.subtitle,
       sessionMinutes: sessionDuration,
       ctaText: revealCopy.ctaText,
+      source: "timed",
     });
 
-    return sessionMinutes;
+    return {
+      sessionId: newSession.id,
+      sessionMinutes,
+      updatedSessions,
+    };
   };
 
   const saveBookForSession = async () => {
     const trimmedTitle = bookTitle.trim();
     const titleToSave = trimmedTitle || "Unassigned reading";
 
-    const sessionMinutes = await saveSession(titleToSave);
+    const savedSession = await saveSession(titleToSave);
 
     if (showBookCompletedInput) {
-      await saveCompletedBookReview(titleToSave, sessionMinutes);
+      const bookStats = getBookReadingStats(
+        titleToSave,
+        savedSession.updatedSessions,
+      );
+
+      setCompletedBookMoment({
+        sessionId: savedSession.sessionId,
+        title: titleToSave,
+        sessionMinutes: savedSession.sessionMinutes,
+        totalBookMinutes: bookStats.totalMinutes.toFixed(1),
+        sessionCount: bookStats.sessionCount,
+      });
+      setSanctuaryReveal(null);
     }
 
     if (trimmedTitle) {
@@ -774,14 +903,13 @@ export default function HomeScreen() {
     }
 
     if (trimmedTitle) {
-      setSessionMessage(`+${formatDuration(Number(sessionMinutes))} • ${trimmedTitle}`);
+      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} • ${trimmedTitle}`);
     } else {
-      setSessionMessage(`+${formatDuration(Number(sessionMinutes))} added`);
+      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
     }
 
-    setShowBookInput(false);
     setShowBookCompletedInput(false);
-    setCompletedBookReview("");
+    setScreen(showBookCompletedInput ? "completedBook" : "reveal");
 
     setTimeout(() => {
       setSessionMessage(null);
@@ -789,12 +917,12 @@ export default function HomeScreen() {
   };
 
   const skipBookForSession = async () => {
-    const sessionMinutes = await saveSession("Unassigned reading");
+    const savedSession = await saveSession("Unassigned reading");
 
-    setSessionMessage(`+${formatDuration(Number(sessionMinutes))} added`);
-    setShowBookInput(false);
+    setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
     setShowBookCompletedInput(false);
     setCompletedBookReview("");
+    setScreen("reveal");
 
     setTimeout(() => {
       setSessionMessage(null);
@@ -804,10 +932,13 @@ export default function HomeScreen() {
   const saveCompletedBookReview = async (
     title: string,
     sessionMinutes: string,
+    totalBookMinutes: string,
+    sessionCount: number,
+    sessionId: string,
   ) => {
     const trimmedReview = completedBookReview.trim();
     const savedCompletedBooks = await AsyncStorage.getItem(COMPLETED_BOOKS_KEY);
-    const completedBooks: CompletedBookReview[] = savedCompletedBooks
+    const storedCompletedBooks: CompletedBookReview[] = savedCompletedBooks
       ? JSON.parse(savedCompletedBooks)
       : [];
 
@@ -817,12 +948,46 @@ export default function HomeScreen() {
       review: trimmedReview,
       completedAt: new Date().toISOString(),
       sessionMinutes,
+      totalBookMinutes,
+      sessionCount,
     };
 
+    const updatedSessions = recentSessions.map((session) =>
+      session.id === sessionId && trimmedReview
+        ? { ...session, reflection: trimmedReview }
+        : session,
+    );
+
+    if (trimmedReview) {
+      setRecentSessions(updatedSessions);
+      await AsyncStorage.setItem(SESSIONS_KEY, JSON.stringify(updatedSessions));
+    }
+
+    const updatedCompletedBooks = [completedBook, ...storedCompletedBooks];
+
+    setCompletedBooks(updatedCompletedBooks);
     await AsyncStorage.setItem(
       COMPLETED_BOOKS_KEY,
-      JSON.stringify([completedBook, ...completedBooks].slice(0, 20)),
+      JSON.stringify(updatedCompletedBooks),
     );
+  };
+
+  const finishCompletedBookMoment = async () => {
+    if (!completedBookMoment) return;
+
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    await saveCompletedBookReview(
+      completedBookMoment.title,
+      completedBookMoment.sessionMinutes,
+      completedBookMoment.totalBookMinutes,
+      completedBookMoment.sessionCount,
+      completedBookMoment.sessionId,
+    );
+
+    setScreen("home");
+    setCompletedBookReview("");
+    setCompletedBookMoment(null);
+    setSanctuaryReveal(null);
   };
 
   const openManualLog = async () => {
@@ -832,17 +997,16 @@ export default function HomeScreen() {
     setManualLogNote("");
     setManualLogError(null);
     setSanctuaryReveal(null);
+    setCompletedBookMoment(null);
     setSessionMessage(null);
-    setShowBookInput(false);
-    setShowCloseSessionTransition(false);
-    setShowManualLogInput(true);
+    setScreen("manualLog");
   };
 
   const cancelManualLog = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setShowManualLogInput(false);
     setManualLogNote("");
     setManualLogError(null);
+    setScreen("home");
   };
 
   const saveManualReadingLog = async () => {
@@ -866,18 +1030,18 @@ export default function HomeScreen() {
     const updatedTodaySeconds = seconds + manualSessionSeconds;
     const updatedLifetimeSeconds = lifetimeSeconds + manualSessionSeconds;
 
-    await updateReadDayIfNeeded();
+    await persistTodayDateIfNeeded();
 
     const newSession: ReadingSession = {
       id: Date.now().toString(),
       title: titleToSave,
       minutes: sessionMinutes,
-      note: trimmedNote || undefined,
+      reflection: trimmedNote || null,
       createdAt: new Date().toISOString(),
       source: "logged",
     };
 
-    const updatedSessions = [newSession, ...recentSessions].slice(0, 5);
+    const updatedSessions = [newSession, ...recentSessions];
     const updatedTotalCompletedSessions = totalCompletedSessions + 1;
     const previousSanctuaryStageNumber = getSanctuaryStage(
       totalCompletedSessions,
@@ -898,9 +1062,20 @@ export default function HomeScreen() {
     setLifetimeSeconds(updatedLifetimeSeconds);
     setRecentSessions(updatedSessions);
     setTotalCompletedSessions(updatedTotalCompletedSessions);
-    setShowManualLogInput(false);
+    setSanctuaryReveal({
+      sessionId: newSession.id,
+      stage: updatedSanctuaryStageNumber,
+      stageChanged: didSanctuaryStageChange,
+      title: revealCopy.title,
+      subtitle: revealCopy.subtitle,
+      sessionMinutes: sessionDuration,
+      ctaText: revealCopy.ctaText,
+      source: "logged",
+    });
     setManualLogNote("");
+    setSessionReflection("");
     setManualLogError(null);
+    setScreen("reveal");
 
     if (trimmedTitle) {
       setCurrentBookTitle(trimmedTitle);
@@ -916,16 +1091,6 @@ export default function HomeScreen() {
         String(updatedTotalCompletedSessions),
       ],
     ]);
-
-    setSanctuaryReveal({
-      sessionId: newSession.id,
-      stage: updatedSanctuaryStageNumber,
-      stageChanged: didSanctuaryStageChange,
-      title: revealCopy.title,
-      subtitle: revealCopy.subtitle,
-      sessionMinutes: sessionDuration,
-      ctaText: revealCopy.ctaText,
-    });
 
     setSessionMessage(`+${sessionDuration} • logged`);
 
@@ -957,14 +1122,15 @@ export default function HomeScreen() {
       await saveSessionReflection();
     }
 
+    setScreen("home");
     setSessionReflection("");
     setSanctuaryReveal(null);
   };
 
   const dismissWelcomeScreen = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setShowWelcomeScreen(false);
     await AsyncStorage.setItem(HAS_SEEN_WELCOME_KEY, "true");
+    setScreen("home");
   };
 
   const visibleSessions = recentSessions.slice(0, 3);
@@ -974,7 +1140,7 @@ export default function HomeScreen() {
     currentBookTitle || latestSession?.title || "Your next book";
   const currentBookMeta = currentBookTitle
     ? latestSession?.title === currentBookTitle
-      ? `Last read ${formatSessionTimestamp(latestSession.createdAt, latestSession.date)}`
+      ? `Last read ${formatSessionTimestamp(latestSession.createdAt)}`
       : "Saved as your current book"
     : "Save a session to place a book here";
   const readingPlaceContinuityCopy = hasPlacedBook
@@ -982,6 +1148,10 @@ export default function HomeScreen() {
     : "Your first book can live here.";
   const revealBookTitle =
     bookTitle.trim() || manualLogBookTitle.trim() || currentBookTitle || latestSession?.title || "your book";
+  const timeAwareGreeting = getTimeAwareGreeting();
+  const diarySessions = [...recentSessions].sort(
+    (first, second) => getSessionDateValue(second) - getSessionDateValue(first),
+  );
 
   const ritualBreathScale = ritualBreath.interpolate({
     inputRange: [0, 1],
@@ -992,16 +1162,16 @@ export default function HomeScreen() {
     outputRange: [0.16, 0.34],
   });
 
-  if (!isLoaded) {
-    return (
+  switch (screen) {
+    case "loading":
+      return (
       <ThemedView style={styles.loadingContainer}>
         <ThemedText style={styles.loadingText}>Loading Rousd...</ThemedText>
       </ThemedView>
     );
-  }
 
-  if (showWelcomeScreen) {
-    return (
+    case "welcome":
+      return (
       <ThemedView style={styles.welcomeScreen}>
         <View pointerEvents="none" style={styles.welcomeGlowTop} />
         <View pointerEvents="none" style={styles.welcomeGlowBottom} />
@@ -1058,118 +1228,12 @@ export default function HomeScreen() {
         </View>
       </ThemedView>
     );
-  }
+  
 
-  if (isReading) {
-    return (
-      <ThemedView style={styles.sessionScreen}>
-        <View style={styles.dimLayer} />
+    case "closeTransition": {
+      const pendingDuration = formatDuration(pendingSessionSeconds / 60);
 
-        <View style={styles.quietSessionContent}>
-          <View style={styles.activeBeaconBadge}>
-            <ThemedText style={styles.activeBeaconIcon}>♜</ThemedText>
-          </View>
-          <ThemedText style={styles.quietSessionEyebrow}>
-            Reading session
-          </ThemedText>
-          <ThemedText style={styles.quietSessionTitle}>
-            Your time is being kept.
-          </ThemedText>
-          <ThemedText style={styles.quietSessionSubtitle}>
-            {"Return when you're ready."}
-          </ThemedText>
-        </View>
-
-        <View style={styles.quietBottomArea}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.quietEndSessionButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={handlePress}
-          >
-            <ThemedText style={styles.quietEndSessionText}>
-              End session
-            </ThemedText>
-          </Pressable>
-        </View>
-
-        {showRitualScreen && (
-          <Animated.View
-            pointerEvents="none"
-            style={[
-              styles.ritualOverlay,
-              { opacity: ritualOpacity, transform: [{ scale: ritualScale }] },
-            ]}
-          >
-            <View style={styles.sessionGlowOne} />
-            <View style={styles.sessionGlowTwo} />
-
-            <View style={styles.sessionContent}>
-              <View style={styles.beaconMark}>
-                <View style={styles.beaconBeam} />
-                <ThemedText style={styles.sessionBookIcon}>♜</ThemedText>
-              </View>
-              <ThemedText style={styles.sessionTitle}>
-                Your reading session has begun
-              </ThemedText>
-              <ThemedText style={styles.sessionSubtitle}>
-                We will keep time.                   
-              </ThemedText>
-
-              <View style={styles.ritualCountdownArea}>
-                <Animated.View
-                  style={[
-                    styles.ritualBreathRing,
-                    {
-                      opacity: ritualBreathOpacity,
-                      transform: [{ scale: ritualBreathScale }],
-                    },
-                  ]}
-                />
-                <Animated.View
-                  style={[
-                    styles.ritualCountdownBubble,
-                    {
-                      opacity: ritualCountdownOpacity,
-                      transform: [{ scale: ritualCountdownScale }],
-                    },
-                  ]}
-                >
-                  <ThemedText
-                    style={[
-                      styles.ritualCountdownText,
-                      ritualCountdownText.length > 1 &&
-                        styles.ritualCountdownTextLong,
-                    ]}
-                    numberOfLines={1}
-                    adjustsFontSizeToFit
-                  >
-                    {ritualCountdownText}
-                  </ThemedText>
-                </Animated.View>
-              </View>
-
-              <ThemedText style={styles.ritualInstruction}>
-                Open your book or e-reader.{"\n"}Place your phone down.
-              </ThemedText>
-
-              <View style={styles.focusPill}>
-                <ThemedText style={styles.focusPillText}>
-                  Settle in.                 
-                </ThemedText>
-              </View>
-            </View>
-          </Animated.View>
-        )}
-      </ThemedView>
-    );
-  }
-
-  if (showCloseSessionTransition) {
-    const pendingDuration = formatDuration(pendingSessionSeconds / 60);
-
-    return (
+      return (
       <ThemedView style={styles.closeTransitionScreen}>
         <View style={styles.sessionGlowOne} />
         <View style={styles.sessionGlowTwo} />
@@ -1196,17 +1260,114 @@ export default function HomeScreen() {
             +{pendingDuration} read
           </ThemedText>
           <ThemedText style={styles.closeTransitionSubtext}>
-            Take a breath. Then we’ll save this time to the book you read.
+            {"Take a breath. Then we'll save this time to the book you read."}
           </ThemedText>
         </Animated.View>
       </ThemedView>
     );
-  }
+    }
 
-  if (showBookInput) {
-    const pendingDuration = formatDuration(pendingSessionSeconds / 60);
+    case "ritual":
+      return (
+      <ThemedView style={styles.ritualTransitionScreen}>
+        <View style={styles.sessionGlowOne} />
+        <View style={styles.sessionGlowTwo} />
 
-    return (
+        <Animated.View
+          style={[
+            styles.sessionContent,
+            { opacity: ritualOpacity, transform: [{ scale: ritualScale }] },
+          ]}
+        >
+          <View style={styles.beaconMark}>
+            <View style={styles.beaconBeam} />
+            <ThemedText style={styles.sessionBookIcon}>♜</ThemedText>
+          </View>
+          <View style={styles.ritualLineArea}>
+            <Animated.View
+              style={[
+                styles.ritualBreathRing,
+                {
+                  opacity: ritualBreathOpacity,
+                  transform: [{ scale: ritualBreathScale }],
+                },
+              ]}
+            />
+            <Animated.View
+              style={[
+                styles.ritualLineWrap,
+                {
+                  opacity: ritualLineOpacity,
+                  transform: [{ translateY: ritualLineTranslateY }],
+                },
+              ]}
+            >
+              <ThemedText style={styles.ritualLineText}>
+                {ritualLineText}
+              </ThemedText>
+            </Animated.View>
+          </View>
+        </Animated.View>
+      </ThemedView>
+    );
+
+    case "active":
+      return (
+      <ThemedView style={styles.sessionScreen}>
+        <View style={styles.dimLayer} />
+
+        <Animated.View
+          style={[
+            styles.quietSessionContent,
+            {
+              opacity: activeSessionOpacity,
+              transform: [{ translateY: activeSessionTranslateY }],
+            },
+          ]}
+        >
+          <View style={styles.activeBeaconBadge}>
+            <ThemedText style={styles.activeBeaconIcon}>♜</ThemedText>
+          </View>
+          <ThemedText style={styles.quietSessionEyebrow}>
+            Reading session
+          </ThemedText>
+          <ThemedText style={styles.quietSessionTitle}>
+            Your time is being kept.
+          </ThemedText>
+          <ThemedText style={styles.quietSessionSubtitle}>
+            {"Return when you're ready."}
+          </ThemedText>
+        </Animated.View>
+
+        <Animated.View
+          style={[
+            styles.quietBottomArea,
+            {
+              opacity: activeSessionOpacity,
+              transform: [{ translateY: activeSessionTranslateY }],
+            },
+          ]}
+        >
+          <Pressable
+            style={({ pressed }) => [
+              styles.quietEndSessionButton,
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={handlePress}
+          >
+            <ThemedText style={styles.quietEndSessionText}>
+              End session
+            </ThemedText>
+          </Pressable>
+        </Animated.View>
+      </ThemedView>
+    );
+  
+
+    case "bookInput": {
+      const pendingDuration = formatDuration(pendingSessionSeconds / 60);
+
+      return (
       <ThemedView style={styles.bookReturnScreen}>
         <View pointerEvents="none" style={styles.bookReturnGlowTop} />
         <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
@@ -1288,7 +1449,7 @@ export default function HomeScreen() {
                   Book completed?
                 </ThemedText>
                 <ThemedText style={styles.bookCompletedSubtext}>
-                  Save a quiet note about finishing this book.
+                  Mark this book as finished after saving the session.
                 </ThemedText>
               </View>
               <View
@@ -1304,23 +1465,7 @@ export default function HomeScreen() {
                 )}
               </View>
             </Pressable>
-
-            {showBookCompletedInput && (
-              <TextInput
-                placeholder="Short reflection"
-                placeholderTextColor="rgba(31,41,51,0.38)"
-                value={completedBookReview}
-                onChangeText={setCompletedBookReview}
-                style={styles.bookCompletedReviewInput}
-                multiline
-                textAlignVertical="top"
-              />
-            )}
           </View>
-
-          <ThemedText style={styles.bookReturnHelperText}>
-            This is where Google Books search will live next. For now, type a title or choose a recent book.
-          </ThemedText>
 
           <View style={styles.closeButtonRow}>
             <Pressable
@@ -1350,12 +1495,12 @@ export default function HomeScreen() {
         </ScrollView>
       </ThemedView>
     );
-  }
+    }
 
-  if (showManualLogInput) {
-    const presetMinutes = ["10", "20", "30", "45", "60"];
+    case "manualLog": {
+      const presetMinutes = ["10", "20", "30", "45", "60"];
 
-    return (
+      return (
       <ThemedView style={styles.closeSessionScreen}>
         <View style={styles.sessionGlowOne} />
         <View style={styles.sessionGlowTwo} />
@@ -1367,7 +1512,7 @@ export default function HomeScreen() {
           <ThemedText style={styles.closeEyebrow}>Manual log</ThemedText>
           <ThemedText style={styles.closeTitle}>What did the time hold?</ThemedText>
           <ThemedText style={styles.closeMinutes}>
-            Add the pages you read away from the timer.
+            Capture a reading moment, with or without the timer.
           </ThemedText>
 
           <View style={styles.manualPresetRow}>
@@ -1470,12 +1615,105 @@ export default function HomeScreen() {
         </ScrollView>
       </ThemedView>
     );
-  }
+    }
 
-  if (sanctuaryReveal) {
-    const hasSessionReflection = sessionReflection.trim().length > 0;
+    case "completedBook": {
+      if (!completedBookMoment) {
+        return null;
+      }
 
-    return (
+      const sessionWord =
+        completedBookMoment.sessionCount === 1 ? "session" : "sessions";
+
+      return (
+      <ThemedView style={styles.completedBookScreen}>
+        <View pointerEvents="none" style={styles.bookReturnGlowTop} />
+        <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
+
+        <ScrollView contentContainerStyle={styles.completedBookContent}>
+          <ThemedText style={styles.completedBookEyebrow}>
+            Book completed
+          </ThemedText>
+          <ThemedText style={styles.completedBookHeadline}>
+            You finished a book.
+          </ThemedText>
+          <ThemedText style={styles.completedBookSupport}>
+            You spent time with this story.
+          </ThemedText>
+
+          <View style={styles.completedBookCard}>
+            <View style={styles.completedBookCover}>
+              <ThemedText
+                style={styles.completedBookCoverTitle}
+                numberOfLines={5}
+              >
+                {completedBookMoment.title}
+              </ThemedText>
+            </View>
+            <ThemedText style={styles.completedBookTitle} numberOfLines={3}>
+              {completedBookMoment.title}
+            </ThemedText>
+            <View style={styles.completedBookStatsRow}>
+              <View style={styles.completedBookStat}>
+                <ThemedText style={styles.completedBookStatValue}>
+                  {formatDuration(Number(completedBookMoment.totalBookMinutes))}
+                </ThemedText>
+                <ThemedText style={styles.completedBookStatLabel}>
+                  reading time
+                </ThemedText>
+              </View>
+              <View style={styles.completedBookStat}>
+                <ThemedText style={styles.completedBookStatValue}>
+                  {completedBookMoment.sessionCount}
+                </ThemedText>
+                <ThemedText style={styles.completedBookStatLabel}>
+                  {sessionWord}
+                </ThemedText>
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.completedBookReflectionWrap}>
+            <ThemedText style={styles.completedBookReflectionLabel}>
+              What will you remember about this book?
+            </ThemedText>
+            <TextInput
+              placeholder="A thought, a feeling, a line..."
+              placeholderTextColor="rgba(47,93,80,0.42)"
+              value={completedBookReview}
+              onChangeText={setCompletedBookReview}
+              style={styles.completedBookReflectionInput}
+              multiline
+              textAlignVertical="top"
+            />
+          </View>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.completedBookReturnButton,
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={finishCompletedBookMoment}
+          >
+            <ThemedText style={styles.completedBookReturnButtonText}>
+              Return to your reading life
+            </ThemedText>
+          </Pressable>
+        </ScrollView>
+      </ThemedView>
+    );
+    }
+
+    case "reveal": {
+      if (!sanctuaryReveal) {
+        return null;
+      }
+
+      const allowsSessionReflection = sanctuaryReveal.source === "timed";
+      const hasSessionReflection =
+        allowsSessionReflection && sessionReflection.trim().length > 0;
+
+      return (
       <ThemedView style={styles.bookRevealScreen}>
         <View pointerEvents="none" style={styles.bookReturnGlowTop} />
         <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
@@ -1520,20 +1758,22 @@ export default function HomeScreen() {
               </View>
             </Animated.View>
 
-            <View style={styles.sessionReflectionWrap}>
-              <ThemedText style={styles.sessionReflectionLabel}>
-                {"A note, if you'd like one."}
-              </ThemedText>
-              <TextInput
-                placeholder="A thought, a line, a feeling…"
-                placeholderTextColor="rgba(47,93,80,0.42)"
-                value={sessionReflection}
-                onChangeText={setSessionReflection}
-                style={styles.sessionReflectionInput}
-                multiline
-                textAlignVertical="top"
-              />
-            </View>
+            {allowsSessionReflection && (
+              <View style={styles.sessionReflectionWrap}>
+                <ThemedText style={styles.sessionReflectionLabel}>
+                  {"A note, if you'd like one."}
+                </ThemedText>
+                <TextInput
+                  placeholder="A thought, a line, a feeling…"
+                  placeholderTextColor="rgba(47,93,80,0.42)"
+                  value={sessionReflection}
+                  onChangeText={setSessionReflection}
+                  style={styles.sessionReflectionInput}
+                  multiline
+                  textAlignVertical="top"
+                />
+              </View>
+            )}
 
             <View style={styles.revealCopyCard}>
               <ThemedText style={styles.revealStageLabel}>
@@ -1565,7 +1805,7 @@ export default function HomeScreen() {
               </ThemedText>
             </Pressable>
 
-            {hasSessionReflection && (
+            {allowsSessionReflection && hasSessionReflection && (
               <Pressable
                 style={({ pressed }) => [
                   styles.bookRevealSecondaryButton,
@@ -1582,9 +1822,184 @@ export default function HomeScreen() {
         </Animated.View>
       </ThemedView>
     );
-  }
+    }
 
-  return (
+    case "diary":
+      return (
+        <ThemedView style={styles.diaryScreen}>
+          <ScrollView
+            style={styles.diaryScrollView}
+            contentContainerStyle={styles.diaryContent}
+          >
+            <Pressable
+              style={({ pressed }) => [
+                styles.diaryBackButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => setScreen("home")}
+            >
+              <ThemedText style={styles.diaryBackButtonText}>
+                Return home
+              </ThemedText>
+            </Pressable>
+
+            <ThemedText style={styles.diaryTitle}>Your reading life</ThemedText>
+            <ThemedText style={styles.diarySubtitle}>
+              A private record.
+            </ThemedText>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.finishedBooksInlineButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => setScreen("finishedBooks")}
+            >
+              <ThemedText style={styles.finishedBooksInlineButtonText}>
+                Finished books
+              </ThemedText>
+            </Pressable>
+
+            {diarySessions.length === 0 ? (
+              <View style={styles.diaryEmptyCard}>
+                <ThemedText style={styles.diaryEmptyText}>
+                  Your first session will appear here.
+                </ThemedText>
+              </View>
+            ) : (
+              <View style={styles.diaryTimeline}>
+                {diarySessions.map((session, index) => {
+                  const previousSession = diarySessions[index - 1];
+                  const dayHeader = formatDiaryDayHeader(session);
+                  const shouldShowHeader =
+                    !previousSession ||
+                    formatDiaryDayHeader(previousSession) !== dayHeader;
+                  const sessionReflection = getSessionNote(session);
+                  const legacyDate = (session as ReadingSession & {
+                    date?: string;
+                  }).date;
+
+                  return (
+                    <View key={session.id} style={styles.diaryEntryGroup}>
+                      {shouldShowHeader && (
+                        <ThemedText style={styles.diaryDateHeader}>
+                          {dayHeader}
+                        </ThemedText>
+                      )}
+
+                      <View style={styles.diaryEntryCard}>
+                        <View style={styles.diaryEntryTopRow}>
+                          <View style={styles.diaryEntryCopy}>
+                            <ThemedText style={styles.diaryBookTitle}>
+                              {session.title}
+                            </ThemedText>
+                            <ThemedText style={styles.diaryMeta}>
+                              {session.source === "logged" ? "Logged" : "Timed"} •{" "}
+                              {formatSessionTimestamp(
+                                session.createdAt,
+                                legacyDate,
+                              )}
+                            </ThemedText>
+                          </View>
+
+                          <ThemedText style={styles.diaryDuration}>
+                            {formatDuration(Number(session.minutes))}
+                          </ThemedText>
+                        </View>
+
+                        {sessionReflection ? (
+                          <ThemedText style={styles.diaryReflection}>
+                            {sessionReflection}
+                          </ThemedText>
+                        ) : null}
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+          </ScrollView>
+        </ThemedView>
+      );
+
+    case "finishedBooks":
+      return (
+        <ThemedView style={styles.finishedBooksScreen}>
+          <ScrollView
+            style={styles.finishedBooksScrollView}
+            contentContainerStyle={styles.finishedBooksContent}
+          >
+            <Pressable
+              style={({ pressed }) => [
+                styles.diaryBackButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => setScreen("home")}
+            >
+              <ThemedText style={styles.diaryBackButtonText}>
+                Return home
+              </ThemedText>
+            </Pressable>
+
+            <ThemedText style={styles.finishedBooksTitle}>
+              Finished books
+            </ThemedText>
+            <ThemedText style={styles.finishedBooksSubtitle}>
+              The stories you have closed and kept.
+            </ThemedText>
+
+            {completedBooks.length === 0 ? (
+              <View style={styles.diaryEmptyCard}>
+                <ThemedText style={styles.diaryEmptyText}>
+                  Finished books will gather here.
+                </ThemedText>
+              </View>
+            ) : (
+              <View style={styles.finishedBooksShelf}>
+                {completedBooks.map((book, index) => (
+                  <View key={book.id} style={styles.finishedBookCard}>
+                    <View
+                      style={[
+                        styles.finishedBookCover,
+                        index % 2 === 1 && styles.finishedBookCoverAlt,
+                      ]}
+                    >
+                      <ThemedText
+                        style={styles.finishedBookCoverTitle}
+                        numberOfLines={5}
+                      >
+                        {book.title}
+                      </ThemedText>
+                    </View>
+
+                    <View style={styles.finishedBookCopy}>
+                      <ThemedText style={styles.finishedBookTitle}>
+                        {book.title}
+                      </ThemedText>
+                      <ThemedText style={styles.finishedBookMeta}>
+                        {formatDuration(Number(book.totalBookMinutes ?? book.sessionMinutes))} •{" "}
+                        {book.sessionCount ?? 1}{" "}
+                        {(book.sessionCount ?? 1) === 1 ? "session" : "sessions"}
+                      </ThemedText>
+                      <ThemedText style={styles.finishedBookDate}>
+                        Finished {new Date(book.completedAt).toLocaleDateString()}
+                      </ThemedText>
+                      {book.review.trim() ? (
+                        <ThemedText style={styles.finishedBookReview}>
+                          {book.review.trim()}
+                        </ThemedText>
+                      ) : null}
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
+          </ScrollView>
+        </ThemedView>
+      );
+
+    case "home":
+      return (
     <ScrollView
       style={styles.screen}
       contentContainerStyle={[
@@ -1638,7 +2053,7 @@ export default function HomeScreen() {
           </View>
 
           <ThemedText style={styles.bookShrineGreeting}>
-            Good evening
+            {timeAwareGreeting}
           </ThemedText>
           <ThemedText style={styles.bookShrineSubcopy}>
             Your place is here.
@@ -1733,43 +2148,100 @@ export default function HomeScreen() {
               Start a session with any book or e-reader to begin your archive.
             </ThemedText>
           ) : (
-            visibleSessions.map((session, index) => (
-              <View
-                key={session.id}
-                style={[
-                  styles.sessionRow,
-                  index === visibleSessions.length - 1 && styles.lastSessionRow,
-                ]}
-              >
-                <View style={styles.sessionIconCircle}>
-                  <ThemedText style={styles.sessionRowIcon}>📖</ThemedText>
-                </View>
+            visibleSessions.map((session, index) => {
+              const sessionReflection = getSessionNote(session);
 
-                <View style={styles.sessionTextContainer}>
-                  <ThemedText style={styles.sessionBookTitle}>
-                    {session.title}
-                  </ThemedText>
-                  <ThemedText style={styles.sessionDate}>
-                    {session.source === "logged" ? "Manually Logged" : "Timed"} • {formatSessionTimestamp(session.createdAt, session.date)}
-                  </ThemedText>
-                  {session.note ? (
-                    <ThemedText style={styles.sessionNote} numberOfLines={2}>
-                      {session.note}
+              return (
+                <View
+                  key={session.id}
+                  style={[
+                    styles.sessionRow,
+                    index === visibleSessions.length - 1 && styles.lastSessionRow,
+                  ]}
+                >
+                  <View style={styles.sessionIconCircle}>
+                    <ThemedText style={styles.sessionRowIcon}>📖</ThemedText>
+                  </View>
+
+                  <View style={styles.sessionTextContainer}>
+                    <ThemedText style={styles.sessionBookTitle}>
+                      {session.title}
                     </ThemedText>
-                  ) : null}
-                </View>
+                    <ThemedText style={styles.sessionDate}>
+                      {session.source === "logged" ? "Manually Logged" : "Timed"} • {formatSessionTimestamp(session.createdAt)}
+                    </ThemedText>
+                    {sessionReflection ? (
+                      <ThemedText style={styles.sessionNote} numberOfLines={2}>
+                        {sessionReflection}
+                      </ThemedText>
+                    ) : null}
+                  </View>
 
-                <ThemedText style={styles.sessionMinutes}>
-                  {formatDuration(Number(session.minutes))}
-                </ThemedText>
-              </View>
-            ))
+                  <ThemedText style={styles.sessionMinutes}>
+                    {formatDuration(Number(session.minutes))}
+                  </ThemedText>
+                </View>
+              );
+            })
           )}
         </ThemedView>
 
+        <Pressable
+          style={({ pressed }) => [
+            styles.diaryOpenButton,
+            pressed && styles.buttonPressed,
+          ]}
+          onPress={() => setScreen("diary")}
+        >
+          <ThemedText style={styles.diaryOpenButtonText}>
+            Open diary
+          </ThemedText>
+          <ThemedText style={styles.diaryOpenButtonSubtext}>
+            Read the full private archive.
+          </ThemedText>
+        </Pressable>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.finishedBooksHomeButton,
+            pressed && styles.buttonPressed,
+          ]}
+          onPress={() => setScreen("finishedBooks")}
+        >
+          <View style={styles.finishedBooksHomeCovers}>
+            {completedBooks.length === 0 ? (
+              <View
+                style={[
+                  styles.finishedBooksHomeCover,
+                  styles.finishedBooksHomeCoverAlt,
+                ]}
+              />
+            ) : (
+              completedBooks.slice(0, 3).map((book, index) => (
+                <View
+                  key={book.id}
+                  style={[
+                    styles.finishedBooksHomeCover,
+                    index % 2 === 1 && styles.finishedBooksHomeCoverAlt,
+                  ]}
+                />
+              ))
+            )}
+          </View>
+          <View style={styles.finishedBooksHomeCopy}>
+            <ThemedText style={styles.finishedBooksHomeTitle}>
+              Finished books
+            </ThemedText>
+            <ThemedText style={styles.finishedBooksHomeSubtext}>
+              Revisit the books you have closed.
+            </ThemedText>
+          </View>
+        </Pressable>
+
       </ThemedView>
     </ScrollView>
-  );
+    );
+  }
 }
 
 const cardShadow = {
@@ -3422,6 +3894,319 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     color: colors.accent,
   },
+  diaryOpenButton: {
+    backgroundColor: "rgba(255,248,237,0.70)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    borderRadius: 22,
+    paddingVertical: 16,
+    paddingHorizontal: 18,
+    ...softCardShadow,
+  },
+  diaryOpenButtonText: {
+    color: colors.accentDark,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: "900",
+  },
+  diaryOpenButtonSubtext: {
+    color: "rgba(31,41,51,0.54)",
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "600",
+    marginTop: 3,
+  },
+  diaryScreen: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  diaryScrollView: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  diaryContent: {
+    paddingHorizontal: 24,
+    paddingTop: 72,
+    paddingBottom: 48,
+  },
+  diaryBackButton: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(255,248,237,0.76)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    borderRadius: 999,
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    marginBottom: 24,
+  },
+  diaryBackButtonText: {
+    color: colors.accentDark,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "800",
+  },
+  diaryTitle: {
+    color: "#1B2A22",
+    fontSize: 42,
+    lineHeight: 48,
+    fontWeight: "400",
+    letterSpacing: -0.7,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
+  },
+  diarySubtitle: {
+    color: "rgba(47,93,80,0.54)",
+    fontSize: 16,
+    lineHeight: 23,
+    fontStyle: "italic",
+    fontWeight: "600",
+    marginTop: 8,
+  },
+  diaryEmptyCard: {
+    backgroundColor: "rgba(255,248,237,0.72)",
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    padding: 20,
+    marginTop: 36,
+    ...softCardShadow,
+  },
+  diaryEmptyText: {
+    color: "rgba(47,93,80,0.58)",
+    fontSize: 16,
+    lineHeight: 24,
+    fontStyle: "italic",
+    fontWeight: "600",
+  },
+  diaryTimeline: {
+    marginTop: 34,
+    backgroundColor: "transparent",
+  },
+  diaryEntryGroup: {
+    backgroundColor: "transparent",
+    marginBottom: 20,
+  },
+  diaryDateHeader: {
+    color: "rgba(47,93,80,0.62)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "900",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+    marginBottom: 10,
+  },
+  diaryEntryCard: {
+    backgroundColor: "rgba(255,248,237,0.82)",
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    padding: 18,
+    ...softCardShadow,
+  },
+  diaryEntryTopRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 14,
+    backgroundColor: "transparent",
+  },
+  diaryEntryCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  diaryBookTitle: {
+    color: colors.text,
+    fontSize: 18,
+    lineHeight: 25,
+    fontWeight: "900",
+  },
+  diaryMeta: {
+    color: "rgba(31,41,51,0.50)",
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "700",
+    marginTop: 5,
+  },
+  diaryDuration: {
+    color: colors.accent,
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: "900",
+  },
+  diaryReflection: {
+    color: "rgba(31,41,51,0.68)",
+    fontSize: 16,
+    lineHeight: 25,
+    fontStyle: "italic",
+    fontWeight: "600",
+    marginTop: 15,
+  },
+  finishedBooksInlineButton: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(255,248,237,0.76)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    borderRadius: 999,
+    paddingVertical: 10,
+    paddingHorizontal: 15,
+    marginTop: 22,
+  },
+  finishedBooksInlineButtonText: {
+    color: colors.accentDark,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "800",
+  },
+  finishedBooksHomeButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 14,
+    backgroundColor: "rgba(255,248,237,0.70)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    borderRadius: 22,
+    paddingVertical: 15,
+    paddingHorizontal: 18,
+    ...softCardShadow,
+  },
+  finishedBooksHomeCovers: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: 3,
+    backgroundColor: "transparent",
+  },
+  finishedBooksHomeCover: {
+    width: 13,
+    height: 42,
+    borderRadius: 4,
+    backgroundColor: colors.sessionBackground,
+  },
+  finishedBooksHomeCoverAlt: {
+    height: 34,
+    backgroundColor: colors.softAccent,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.16)",
+  },
+  finishedBooksHomeCopy: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
+  finishedBooksHomeTitle: {
+    color: colors.accentDark,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: "900",
+  },
+  finishedBooksHomeSubtext: {
+    color: "rgba(31,41,51,0.54)",
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "600",
+    marginTop: 3,
+  },
+  finishedBooksScreen: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  finishedBooksScrollView: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  finishedBooksContent: {
+    paddingHorizontal: 24,
+    paddingTop: 72,
+    paddingBottom: 48,
+  },
+  finishedBooksTitle: {
+    color: "#1B2A22",
+    fontSize: 42,
+    lineHeight: 48,
+    fontWeight: "400",
+    letterSpacing: -0.7,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
+  },
+  finishedBooksSubtitle: {
+    color: "rgba(47,93,80,0.54)",
+    fontSize: 16,
+    lineHeight: 23,
+    fontStyle: "italic",
+    fontWeight: "600",
+    marginTop: 8,
+  },
+  finishedBooksShelf: {
+    gap: 18,
+    marginTop: 34,
+    backgroundColor: "transparent",
+  },
+  finishedBookCard: {
+    flexDirection: "row",
+    gap: 16,
+    backgroundColor: "rgba(255,248,237,0.82)",
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    padding: 16,
+    ...softCardShadow,
+  },
+  finishedBookCover: {
+    width: 86,
+    minHeight: 122,
+    borderRadius: 12,
+    backgroundColor: colors.sessionBackground,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 10,
+  },
+  finishedBookCoverAlt: {
+    backgroundColor: colors.softAccent,
+  },
+  finishedBookCoverTitle: {
+    color: "#FFF8ED",
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: "800",
+    textAlign: "center",
+  },
+  finishedBookCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  finishedBookTitle: {
+    color: colors.text,
+    fontSize: 18,
+    lineHeight: 25,
+    fontWeight: "900",
+  },
+  finishedBookMeta: {
+    color: colors.accentDark,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "800",
+    marginTop: 6,
+  },
+  finishedBookDate: {
+    color: "rgba(31,41,51,0.48)",
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "700",
+    marginTop: 4,
+  },
+  finishedBookReview: {
+    color: "rgba(31,41,51,0.68)",
+    fontSize: 15,
+    lineHeight: 23,
+    fontStyle: "italic",
+    fontWeight: "600",
+    marginTop: 12,
+  },
   sessionScreen: {
     flex: 1,
     backgroundColor: "#081C16",
@@ -3493,8 +4278,8 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: "800",
   },
-  ritualOverlay: {
-    ...StyleSheet.absoluteFillObject,
+  ritualTransitionScreen: {
+    flex: 1,
     backgroundColor: colors.sessionBackground,
     paddingHorizontal: 30,
     paddingTop: 80,
@@ -3549,66 +4334,38 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 12,
   },
-  ritualCountdownArea: {
-    width: 176,
-    height: 148,
+  ritualLineArea: {
+    width: "100%",
+    minHeight: 180,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 34,
   },
   ritualBreathRing: {
     position: "absolute",
-    width: 150,
-    height: 150,
-    borderRadius: 75,
+    width: 220,
+    height: 220,
+    borderRadius: 110,
     backgroundColor: "rgba(244,197,126,0.18)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.16)",
+    borderColor: "rgba(255,248,237,0.12)",
   },
-  ritualCountdownBubble: {
-    width: 136,
-    height: 104,
-    borderRadius: 52,
+  ritualLineWrap: {
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,248,237,0.11)",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.18)",
+    paddingHorizontal: 14,
   },
-  ritualCountdownText: {
+  ritualLineText: {
     color: "#FFF8EE",
-    fontSize: 38,
-    lineHeight: 44,
-    fontWeight: "800",
-    letterSpacing: -0.8,
-    textAlign: "center",
-    paddingHorizontal: 8,
-  },
-  ritualCountdownTextLong: {
-    fontSize: 30,
+    fontSize: 28,
     lineHeight: 36,
-    letterSpacing: -0.6,
-  },
-  ritualInstruction: {
-    color: "rgba(255,248,237,0.56)",
-    fontSize: 14,
-    lineHeight: 22,
-    fontWeight: "600",
-    textAlign: "center",
-    marginTop: 18,
-  },
-  focusPill: {
-    backgroundColor: "rgba(255,248,237,0.10)",
-    paddingVertical: 10,
-    paddingHorizontal: 17,
-    borderRadius: 999,
-    marginTop: 42,
-  },
-  focusPillText: {
-    color: "rgba(255,248,237,0.78)",
-    fontSize: 14,
-    lineHeight: 20,
     fontWeight: "700",
+    textAlign: "center",
+    maxWidth: 320,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
   },
   closeTransitionScreen: {
     flex: 1,
@@ -4832,6 +5589,146 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     fontWeight: "800",
+  },
+  completedBookScreen: {
+    flex: 1,
+    backgroundColor: "#F7F3EA",
+  },
+  completedBookContent: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingTop: 86,
+    paddingBottom: 42,
+  },
+  completedBookEyebrow: {
+    color: "rgba(47,93,80,0.58)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "900",
+    letterSpacing: 1.3,
+    textTransform: "uppercase",
+    marginBottom: 10,
+  },
+  completedBookHeadline: {
+    color: "#173826",
+    fontSize: 38,
+    lineHeight: 44,
+    fontWeight: "400",
+    letterSpacing: -0.8,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
+  },
+  completedBookSupport: {
+    color: "rgba(31,41,51,0.62)",
+    fontSize: 17,
+    lineHeight: 25,
+    fontWeight: "600",
+    marginTop: 12,
+    marginBottom: 24,
+  },
+  completedBookCard: {
+    backgroundColor: "rgba(255,248,237,0.88)",
+    borderRadius: 30,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    padding: 22,
+    marginBottom: 22,
+    ...softCardShadow,
+  },
+  completedBookCover: {
+    minHeight: 164,
+    borderRadius: 24,
+    backgroundColor: "#173826",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 20,
+    marginBottom: 18,
+  },
+  completedBookCoverTitle: {
+    color: "#FFF8ED",
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: "400",
+    textAlign: "center",
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
+  },
+  completedBookTitle: {
+    color: colors.text,
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: "900",
+    letterSpacing: -0.35,
+  },
+  completedBookStatsRow: {
+    flexDirection: "row",
+    gap: 12,
+    marginTop: 18,
+  },
+  completedBookStat: {
+    flex: 1,
+    backgroundColor: "rgba(47,93,80,0.08)",
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 13,
+  },
+  completedBookStatValue: {
+    color: colors.accentDark,
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: "900",
+  },
+  completedBookStatLabel: {
+    color: "rgba(47,93,80,0.56)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "800",
+    marginTop: 3,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  completedBookReflectionWrap: {
+    marginBottom: 20,
+  },
+  completedBookReflectionLabel: {
+    color: "rgba(47,93,80,0.64)",
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "800",
+    marginBottom: 9,
+  },
+  completedBookReflectionInput: {
+    minHeight: 118,
+    backgroundColor: "rgba(255,248,237,0.82)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.11)",
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 13,
+    color: "rgba(31,41,51,0.74)",
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: "600",
+    fontStyle: "italic",
+  },
+  completedBookReturnButton: {
+    backgroundColor: colors.accent,
+    borderRadius: 999,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    alignItems: "center",
+  },
+  completedBookReturnButtonText: {
+    color: "#FFF8ED",
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: "900",
   },
 
   currentBookContainer: {

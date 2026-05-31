@@ -115,7 +115,8 @@ export default function DiaryScreen() {
           <View pointerEvents="none" style={styles.timelineLine} />
 
           {sessions.map((session) => {
-            const reflection = session.reflection?.trim();
+            const reflection =
+              session.reflection?.trim() || session.note?.trim();
 
             return (
               <View key={session.id} style={styles.timelineEntry}>
