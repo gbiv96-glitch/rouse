@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect } from "@react-navigation/native";
 import { useCallback, useState } from "react";
 import { Platform, ScrollView, StyleSheet, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
@@ -54,6 +55,7 @@ function formatDiaryDate(session: ReadingSession) {
 }
 
 export default function DiaryScreen() {
+  const insets = useSafeAreaInsets();
   const [sessions, setSessions] = useState<ReadingSession[]>([]);
 
   useFocusEffect(
@@ -106,7 +108,10 @@ export default function DiaryScreen() {
     <ThemedView style={styles.screen}>
       <ScrollView
         style={styles.scrollView}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: insets.top + 48 },
+        ]}
       >
         <ThemedText style={styles.title}>Your reading life</ThemedText>
         <ThemedText style={styles.subtitle}>A private record.</ThemedText>

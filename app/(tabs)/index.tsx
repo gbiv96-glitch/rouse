@@ -387,6 +387,32 @@ export default function HomeScreen() {
   ).current;
 
   useEffect(() => {
+    if (screen === "completedBook" && !completedBookMoment) {
+      console.warn(
+        "Rousd completed-book screen opened without completedBookMoment; returning home.",
+      );
+      setCompletedBookReview("");
+      setCompletedBookMoment(null);
+      setSanctuaryReveal(null);
+      setScreen("home");
+      return;
+    }
+
+    if (
+      screen === "reveal" &&
+      (!sanctuaryReveal || !sanctuaryStages[sanctuaryReveal.stage])
+    ) {
+      console.warn(
+        "Rousd reveal screen opened without a valid sanctuaryReveal; returning home.",
+      );
+      setSessionReflection("");
+      setSanctuaryReveal(null);
+      setCompletedBookMoment(null);
+      setScreen("home");
+    }
+  }, [completedBookMoment, sanctuaryReveal, screen]);
+
+  useEffect(() => {
     if (screen !== "ritual") return;
 
     ritualOpacity.setValue(0);
@@ -600,7 +626,7 @@ export default function HomeScreen() {
   ]);
 
   useEffect(() => {
-    if (screen !== "completedBook") return;
+    if (screen !== "completedBook" || !completedBookMoment) return;
 
     const animations = completedBookSparkValues.map((sparkValue, index) => {
       sparkValue.setValue(0);
@@ -628,7 +654,7 @@ export default function HomeScreen() {
     return () => {
       animations.forEach((animation) => animation.stop());
     };
-  }, [completedBookSparkValues, screen]);
+  }, [completedBookMoment, completedBookSparkValues, screen]);
 
   useEffect(() => {
     const loadSavedData = async () => {
@@ -1260,7 +1286,9 @@ export default function HomeScreen() {
 
     case "welcome":
       return (
-      <ThemedView style={styles.welcomeScreen}>
+      <ThemedView
+        style={[styles.welcomeScreen, { paddingTop: insets.top + 28 }]}
+      >
         <View pointerEvents="none" style={styles.welcomeGlowTop} />
         <View pointerEvents="none" style={styles.welcomeGlowBottom} />
 
@@ -1322,7 +1350,12 @@ export default function HomeScreen() {
       const pendingDuration = formatDuration(pendingSessionSeconds / 60);
 
       return (
-      <ThemedView style={styles.closeTransitionScreen}>
+      <ThemedView
+        style={[
+          styles.closeTransitionScreen,
+          { paddingTop: insets.top + 36 },
+        ]}
+      >
         <View style={styles.sessionGlowOne} />
         <View style={styles.sessionGlowTwo} />
 
@@ -1357,7 +1390,12 @@ export default function HomeScreen() {
 
     case "ritual":
       return (
-      <ThemedView style={styles.ritualTransitionScreen}>
+      <ThemedView
+        style={[
+          styles.ritualTransitionScreen,
+          { paddingTop: insets.top + 36 },
+        ]}
+      >
         <View style={styles.sessionGlowOne} />
         <View style={styles.sessionGlowTwo} />
 
@@ -1401,7 +1439,9 @@ export default function HomeScreen() {
 
     case "active":
       return (
-      <ThemedView style={styles.sessionScreen}>
+      <ThemedView
+        style={[styles.sessionScreen, { paddingTop: insets.top + 36 }]}
+      >
         <View style={styles.dimLayer} />
 
         <Animated.View
@@ -1458,13 +1498,23 @@ export default function HomeScreen() {
         bookTitle.trim().length > 0 || currentBookTitle.trim().length > 0;
 
       return (
-      <ThemedView style={styles.bookReturnScreen}>
+      <ThemedView
+        style={[styles.bookReturnScreen, { paddingTop: insets.top + 32 }]}
+      >
         <View pointerEvents="none" style={styles.bookReturnGlowTop} />
         <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
 
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1 }}
+        >
         <ScrollView
           keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.bookReturnContent}
+          keyboardDismissMode="interactive"
+          contentContainerStyle={[
+            styles.bookReturnContent,
+            { paddingBottom: insets.bottom + 80 },
+          ]}
         >
           <ThemedText style={styles.bookReturnEyebrow}>Welcome back</ThemedText>
           <ThemedText style={styles.bookReturnTitle}>
@@ -1588,6 +1638,7 @@ export default function HomeScreen() {
             </Pressable>
           </View>
         </ScrollView>
+        </KeyboardAvoidingView>
       </ThemedView>
     );
     }
@@ -1596,7 +1647,9 @@ export default function HomeScreen() {
       const presetMinutes = ["10", "20", "30", "45", "60"];
 
       return (
-      <ThemedView style={styles.closeSessionScreen}>
+      <ThemedView
+        style={[styles.closeSessionScreen, { paddingTop: insets.top + 32 }]}
+      >
         <View style={styles.sessionGlowOne} />
         <View style={styles.sessionGlowTwo} />
 
@@ -1722,7 +1775,11 @@ export default function HomeScreen() {
 
     case "completedBook": {
       if (!completedBookMoment) {
-        return null;
+        return (
+          <ThemedView style={styles.loadingContainer}>
+            <ThemedText style={styles.loadingText}>Returning home...</ThemedText>
+          </ThemedView>
+        );
       }
 
       const firstSessionTimestamp = getBookFirstSessionTimestamp(
@@ -1892,8 +1949,12 @@ export default function HomeScreen() {
     }
 
     case "reveal": {
-      if (!sanctuaryReveal) {
-        return null;
+      if (!sanctuaryReveal || !sanctuaryStages[sanctuaryReveal.stage]) {
+        return (
+          <ThemedView style={styles.loadingContainer}>
+            <ThemedText style={styles.loadingText}>Returning home...</ThemedText>
+          </ThemedView>
+        );
       }
 
       const allowsSessionReflection = sanctuaryReveal.source === "timed";
@@ -1901,7 +1962,9 @@ export default function HomeScreen() {
         allowsSessionReflection && sessionReflection.trim().length > 0;
 
       return (
-      <ThemedView style={styles.bookRevealScreen}>
+      <ThemedView
+        style={[styles.bookRevealScreen, { paddingTop: insets.top + 30 }]}
+      >
         <View pointerEvents="none" style={styles.bookReturnGlowTop} />
         <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
 
@@ -2237,7 +2300,9 @@ export default function HomeScreen() {
         { paddingBottom: 132 + insets.bottom },
       ]}
     >
-      <ThemedView style={styles.container}>
+      <ThemedView
+        style={[styles.container, { paddingTop: insets.top + 18 }]}
+      >
         <View pointerEvents="none" style={styles.warmVignetteTop} />
         <View pointerEvents="none" style={styles.warmVignetteBottom} />
         <View pointerEvents="none" style={styles.mountainBackdrop}>
@@ -2389,7 +2454,7 @@ export default function HomeScreen() {
                   ]}
                 >
                   <View style={styles.sessionIconCircle}>
-                    <ThemedText style={styles.sessionRowIcon}>ðŸ“–</ThemedText>
+                    <View style={styles.sessionRowDot} />
                   </View>
 
                   <View style={styles.sessionTextContainer}>
@@ -2496,7 +2561,6 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     flexGrow: 1,
-    paddingBottom: 132,
   },
   container: {
     flex: 1,
@@ -3498,9 +3562,11 @@ const styles = StyleSheet.create({
     backgroundColor: colors.softAccent,
     marginRight: 14,
   },
-  sessionRowIcon: {
-    fontSize: 20,
-    lineHeight: 24,
+  sessionRowDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "rgba(47,93,80,0.72)",
   },
   sessionTextContainer: {
     flex: 1,
