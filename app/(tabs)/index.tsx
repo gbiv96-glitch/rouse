@@ -328,6 +328,11 @@ function getTimeAwareGreeting() {
   return "Good evening";
 }
 
+function getValidBookTitle(title?: string | null) {
+  const trimmedTitle = title?.trim() ?? "";
+  return trimmedTitle.length > 0 ? trimmedTitle : null;
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [isReading, setIsReading] = useState(false);
@@ -411,6 +416,13 @@ export default function HomeScreen() {
       setScreen("home");
     }
   }, [completedBookMoment, sanctuaryReveal, screen]);
+
+  useEffect(() => {
+    if (showBookCompletedInput && !getValidBookTitle(bookTitle)) {
+      setShowBookCompletedInput(false);
+      setCompletedBookReview("");
+    }
+  }, [bookTitle, showBookCompletedInput]);
 
   useEffect(() => {
     if (screen !== "ritual") return;
@@ -983,12 +995,20 @@ export default function HomeScreen() {
   };
 
   const saveBookForSession = async () => {
-    const trimmedTitle = bookTitle.trim();
-    const titleToSave = trimmedTitle || "Unassigned reading";
+    const validBookTitle = getValidBookTitle(bookTitle);
+    const titleToSave = validBookTitle || "Unassigned reading";
+    const shouldCompleteBook = showBookCompletedInput && Boolean(validBookTitle);
 
     const savedSession = await saveSession(titleToSave);
 
-    if (showBookCompletedInput) {
+    if (showBookCompletedInput && !validBookTitle) {
+      console.warn(
+        "Rousd skipped completed-book save because no valid book title was entered.",
+      );
+      setCompletedBookReview("");
+    }
+
+    if (shouldCompleteBook) {
       const bookStats = getBookReadingStats(
         titleToSave,
         savedSession.updatedSessions,
@@ -1004,19 +1024,19 @@ export default function HomeScreen() {
       setSanctuaryReveal(null);
     }
 
-    if (trimmedTitle) {
-      setCurrentBookTitle(trimmedTitle);
-      await AsyncStorage.setItem(CURRENT_BOOK_KEY, trimmedTitle);
+    if (validBookTitle) {
+      setCurrentBookTitle(validBookTitle);
+      await AsyncStorage.setItem(CURRENT_BOOK_KEY, validBookTitle);
     }
 
-    if (trimmedTitle) {
-      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} • ${trimmedTitle}`);
+    if (validBookTitle) {
+      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} • ${validBookTitle}`);
     } else {
       setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
     }
 
     setShowBookCompletedInput(false);
-    setScreen(showBookCompletedInput ? "completedBook" : "reveal");
+    setScreen(shouldCompleteBook ? "completedBook" : "reveal");
 
     setTimeout(() => {
       setSessionMessage(null);
@@ -1280,7 +1300,7 @@ export default function HomeScreen() {
     case "loading":
       return (
       <ThemedView style={styles.loadingContainer}>
-        <ThemedText style={styles.loadingText}>Loading Rousd...</ThemedText>
+        <ThemedText style={styles.loadingWordmark}>Rousd</ThemedText>
       </ThemedView>
     );
 
@@ -1494,8 +1514,7 @@ export default function HomeScreen() {
 
     case "bookInput": {
       const pendingDuration = formatDuration(pendingSessionSeconds / 60);
-      const canCompleteBook =
-        bookTitle.trim().length > 0 || currentBookTitle.trim().length > 0;
+      const canCompleteBook = Boolean(getValidBookTitle(bookTitle));
 
       return (
       <ThemedView
@@ -1610,6 +1629,11 @@ export default function HomeScreen() {
                 />
               </View>
             </Pressable>
+            {!canCompleteBook ? (
+              <ThemedText style={styles.bookCompletedDisabledHelper}>
+                Name the book first, then you can mark it finished.
+              </ThemedText>
+            ) : null}
           </View>
 
           <View style={styles.closeButtonRow}>
@@ -1739,7 +1763,7 @@ export default function HomeScreen() {
           )}
 
           <ThemedText style={styles.closeHelperText}>
-            Add quiet reading time from away from the timer. It will be marked as a logged session in your history.
+            Capture reading time away from the timer. It will be marked as a logged session in your history.
           </ThemedText>
 
           <View style={styles.closeButtonRow}>
@@ -2196,6 +2220,18 @@ export default function HomeScreen() {
               { paddingTop: insets.top + 48, paddingBottom: insets.bottom + 28 },
             ]}
           >
+            <Pressable
+              style={({ pressed }) => [
+                styles.finishedBooksTopReturnButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => setScreen("home")}
+            >
+              <ThemedText style={styles.finishedBooksTopReturnButtonText}>
+                Return home
+              </ThemedText>
+            </Pressable>
+
             <ThemedText style={styles.finishedBooksEyebrow}>
               FINISHED BOOKS
             </ThemedText>
@@ -2491,7 +2527,7 @@ export default function HomeScreen() {
             Open diary
           </ThemedText>
           <ThemedText style={styles.diaryOpenButtonSubtext}>
-            Read the full private archive.
+            Read the full private record.
           </ThemedText>
         </Pressable>
 
@@ -2684,6 +2720,18 @@ const styles = StyleSheet.create({
     fontSize: 18,
     lineHeight: 24,
     fontWeight: "600",
+  },
+  loadingWordmark: {
+    color: colors.accentDark,
+    fontSize: 34,
+    lineHeight: 42,
+    fontWeight: "400",
+    letterSpacing: 0,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
   },
   welcomeScreen: {
     flex: 1,
@@ -3811,6 +3859,18 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontWeight: "600",
     marginTop: 3,
+  },
+  finishedBooksTopReturnButton: {
+    alignSelf: "flex-start",
+    paddingVertical: 6,
+    paddingHorizontal: 2,
+    marginBottom: 26,
+  },
+  finishedBooksTopReturnButtonText: {
+    color: "rgba(47,93,80,0.62)",
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "700",
   },
   finishedBooksScreen: {
     flex: 1,
@@ -5165,6 +5225,13 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: "600",
     marginTop: 3,
+  },
+  bookCompletedDisabledHelper: {
+    color: "rgba(31,41,51,0.48)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "600",
+    marginTop: 10,
   },
   bookCompletedSwitchTrack: {
     width: 32,
