@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import type { BookMetadataFields } from "@/types/book";
 import { formatDuration } from "@/utils/formatDuration";
 
 const SESSIONS_KEY = "readingSessions";
@@ -28,7 +29,7 @@ type ReadingSession = {
   createdAt?: string;
   date?: string;
   source?: "timed" | "logged";
-};
+} & BookMetadataFields;
 
 function getSessionTime(session: ReadingSession) {
   const createdTime = session.createdAt

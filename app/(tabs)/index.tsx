@@ -19,6 +19,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import type { BookMetadataFields } from "@/types/book";
 import { formatDuration } from "@/utils/formatDuration";
 
 const SECONDS_KEY = "todaysReadingSeconds";
@@ -56,7 +57,7 @@ type ReadingSession = {
   note?: string;
   createdAt?: string;
   source?: "timed" | "logged";
-};
+} & BookMetadataFields;
 
 type CompletedBookReview = {
   id: string;
@@ -66,7 +67,7 @@ type CompletedBookReview = {
   sessionMinutes: string;
   totalBookMinutes?: string;
   sessionCount?: number;
-};
+} & BookMetadataFields;
 
 type CompletedBookMoment = {
   sessionId: string;
@@ -74,7 +75,7 @@ type CompletedBookMoment = {
   sessionMinutes: string;
   totalBookMinutes: string;
   sessionCount: number;
-};
+} & BookMetadataFields;
 
 type Screen =
   | "loading"
@@ -1763,7 +1764,7 @@ export default function HomeScreen() {
           )}
 
           <ThemedText style={styles.closeHelperText}>
-            Capture reading time away from the timer. It will be marked as a logged session in your history.
+            Capture reading time away from the timer.
           </ThemedText>
 
           <View style={styles.closeButtonRow}>
@@ -1872,7 +1873,11 @@ export default function HomeScreen() {
               />
             ))}
             <View style={styles.completedBookCover}>
-              <ThemedText style={styles.completedBookCoverTitle} numberOfLines={5}>
+              <ThemedText
+                style={styles.completedBookCoverTitle}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
                 {completedBookMoment.title}
               </ThemedText>
             </View>
@@ -2028,7 +2033,11 @@ export default function HomeScreen() {
               ]}
             >
               <View style={styles.bookRevealCover}>
-                <ThemedText style={styles.bookRevealCoverTitle} numberOfLines={4}>
+                <ThemedText
+                  style={styles.bookRevealCoverTitle}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
                   {revealBookTitle}
                 </ThemedText>
               </View>
@@ -2261,7 +2270,8 @@ export default function HomeScreen() {
                       >
                         <ThemedText
                           style={styles.finishedBookCoverTitle}
-                          numberOfLines={3}
+                          numberOfLines={1}
+                          ellipsizeMode="tail"
                         >
                           {book.title}
                         </ThemedText>
@@ -2392,7 +2402,11 @@ export default function HomeScreen() {
 
           <View style={styles.bookShrineShelf}>
             <View style={styles.bookShrineCover}>
-              <ThemedText style={styles.bookShrineCoverTitle} numberOfLines={4}>
+              <ThemedText
+                style={styles.bookShrineCoverTitle}
+                numberOfLines={1}
+                ellipsizeMode="tail"
+              >
                 {currentBookDisplayTitle}
               </ThemedText>
             </View>
@@ -3935,6 +3949,7 @@ const styles = StyleSheet.create({
   },
   finishedBookCoverTitle: {
     color: "#F0EBE0",
+    width: "100%",
     fontSize: 8,
     lineHeight: 10,
     fontWeight: "700",
@@ -4879,7 +4894,8 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,248,237,0.36)",
     alignItems: "center",
     justifyContent: "center",
-    padding: 12,
+    paddingHorizontal: 9,
+    paddingVertical: 12,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.16,
@@ -4888,10 +4904,11 @@ const styles = StyleSheet.create({
   },
   bookShrineCoverTitle: {
     color: "#F7F3EA",
-    fontSize: 18,
-    lineHeight: 24,
+    width: "100%",
+    fontSize: 16,
+    lineHeight: 22,
     fontWeight: "400",
-    letterSpacing: 1.1,
+    letterSpacing: 0.8,
     textTransform: "uppercase",
     textAlign: "center",
     fontFamily: Platform.select({
@@ -5351,6 +5368,7 @@ const styles = StyleSheet.create({
   },
   bookRevealCoverTitle: {
     color: "#F7F3EA",
+    width: "100%",
     fontSize: 13,
     lineHeight: 17,
     textTransform: "uppercase",
@@ -5464,6 +5482,7 @@ const styles = StyleSheet.create({
   },
   completedBookCoverTitle: {
     color: "#F0EBE0",
+    width: "100%",
     fontSize: 13,
     lineHeight: 17,
     fontWeight: "400",
