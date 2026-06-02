@@ -5,6 +5,7 @@ import {
   Animated,
   AppState,
   AppStateStatus,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -19,7 +20,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
-import type { BookMetadataFields } from "@/types/book";
+import {
+  getLastGoogleBooksLookupStatus,
+  searchGoogleBooks,
+  type GoogleBooksLookupStatus,
+} from "@/services/googleBooks";
+import type { BookMetadata, BookMetadataFields } from "@/types/book";
 import { formatDuration } from "@/utils/formatDuration";
 
 const SECONDS_KEY = "todaysReadingSeconds";
@@ -28,6 +34,7 @@ const LIFETIME_SECONDS_KEY = "lifetimeReadingSeconds";
 const SESSIONS_KEY = "readingSessions";
 const TOTAL_COMPLETED_SESSIONS_KEY = "totalCompletedSessions";
 const CURRENT_BOOK_KEY = "currentBookTitle";
+const CURRENT_BOOK_METADATA_KEY = "currentBookMetadata";
 const COMPLETED_BOOKS_KEY = "completedBooks";
 const HAS_SEEN_WELCOME_KEY = "hasSeenRousdWelcome";
 const ACTIVE_SESSION_START_KEY = "activeReadingSessionStartTime";
@@ -108,7 +115,7 @@ type SanctuaryReveal = {
   sessionMinutes: string;
   ctaText: string;
   source: "timed" | "logged";
-};
+} & BookMetadataFields;
 
 const sanctuaryStages: SanctuaryStage[] = [
   {
@@ -334,6 +341,23 @@ function getValidBookTitle(title?: string | null) {
   return trimmedTitle.length > 0 ? trimmedTitle : null;
 }
 
+function getBookMetadataFields(
+  metadata?: BookMetadata | null,
+): BookMetadataFields {
+  if (!metadata) {
+    return {};
+  }
+
+  return {
+    author: metadata.author ?? null,
+    coverUrl: metadata.coverUrl ?? null,
+    googleBooksId: metadata.googleBooksId ?? null,
+    isbn10: metadata.isbn10 ?? null,
+    isbn13: metadata.isbn13 ?? null,
+    bookSource: metadata.source,
+  };
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [isReading, setIsReading] = useState(false);
@@ -352,6 +376,9 @@ export default function HomeScreen() {
   const [isLoaded, setIsLoaded] = useState(false);
   const [bookTitle, setBookTitle] = useState("");
   const [currentBookTitle, setCurrentBookTitle] = useState("");
+  const [currentBookMetadata, setCurrentBookMetadata] =
+    useState<BookMetadataFields | null>(null);
+  const [hasCurrentBookCoverError, setHasCurrentBookCoverError] = useState(false);
   const [showBookCompletedInput, setShowBookCompletedInput] = useState(false);
   const [completedBookReview, setCompletedBookReview] = useState("");
   const [completedBookMoment, setCompletedBookMoment] =
@@ -364,8 +391,16 @@ export default function HomeScreen() {
   const [manualLogError, setManualLogError] = useState<string | null>(null);
   const [recentSessions, setRecentSessions] = useState<ReadingSession[]>([]);
   const [totalCompletedSessions, setTotalCompletedSessions] = useState(0);
+  const [bookLookupResults, setBookLookupResults] = useState<BookMetadata[]>([]);
+  const [selectedBookMetadata, setSelectedBookMetadata] =
+    useState<BookMetadata | null>(null);
+  const [isBookLookupLoading, setIsBookLookupLoading] = useState(false);
+  const [hasBookLookupSearched, setHasBookLookupSearched] = useState(false);
+  const [bookLookupStatus, setBookLookupStatus] =
+    useState<GoogleBooksLookupStatus>("idle");
   const [sanctuaryReveal, setSanctuaryReveal] =
     useState<SanctuaryReveal | null>(null);
+  const [hasRevealCoverError, setHasRevealCoverError] = useState(false);
   const [sessionReflection, setSessionReflection] = useState("");
   const [ritualLineText, setRitualLineText] = useState(readingRitualLines[0]);
   const [manualLogNote, setManualLogNote] = useState("");
@@ -385,6 +420,8 @@ export default function HomeScreen() {
   const revealScale = useRef(new Animated.Value(0.96)).current;
   const revealTranslateY = useRef(new Animated.Value(18)).current;
   const revealSceneScale = useRef(new Animated.Value(0.98)).current;
+  const bookLookupRequestId = useRef(0);
+  const lastBookLookupQuery = useRef<string | null>(null);
   const completedBookPromptIndex = useRef(
     Math.floor(Math.random() * completedBookReflectionPrompts.length),
   ).current;
@@ -424,6 +461,81 @@ export default function HomeScreen() {
       setCompletedBookReview("");
     }
   }, [bookTitle, showBookCompletedInput]);
+
+  useEffect(() => {
+    setHasCurrentBookCoverError(false);
+  }, [currentBookMetadata?.coverUrl]);
+
+  useEffect(() => {
+    setHasRevealCoverError(false);
+  }, [sanctuaryReveal?.coverUrl]);
+
+  useEffect(() => {
+    if (screen !== "bookInput") {
+      bookLookupRequestId.current += 1;
+      lastBookLookupQuery.current = null;
+      setBookLookupResults([]);
+      setIsBookLookupLoading(false);
+      setHasBookLookupSearched(false);
+      setBookLookupStatus("idle");
+      return;
+    }
+
+    const trimmedQuery = bookTitle.trim();
+    const normalizedQuery = trimmedQuery.toLowerCase();
+
+    if (trimmedQuery.length < 4) {
+      bookLookupRequestId.current += 1;
+      setBookLookupResults([]);
+      setIsBookLookupLoading(false);
+      setHasBookLookupSearched(false);
+      setBookLookupStatus("idle");
+      return;
+    }
+
+    if (lastBookLookupQuery.current === normalizedQuery) {
+      return;
+    }
+
+    const requestId = bookLookupRequestId.current + 1;
+    bookLookupRequestId.current = requestId;
+    setBookLookupResults([]);
+    setIsBookLookupLoading(true);
+    setHasBookLookupSearched(false);
+    setBookLookupStatus("idle");
+
+    const lookupTimer = setTimeout(async () => {
+      try {
+        lastBookLookupQuery.current = normalizedQuery;
+        const results = await searchGoogleBooks(trimmedQuery);
+
+        if (bookLookupRequestId.current !== requestId) {
+          return;
+        }
+
+        setBookLookupResults(results);
+        setBookLookupStatus(getLastGoogleBooksLookupStatus());
+        setHasBookLookupSearched(true);
+      } catch (error) {
+        if (bookLookupRequestId.current !== requestId) {
+          return;
+        }
+
+        console.warn("Rousd Google Books lookup could not finish", error);
+        setBookLookupResults([]);
+        setBookLookupStatus("error");
+        setHasBookLookupSearched(true);
+      } finally {
+        if (bookLookupRequestId.current === requestId) {
+          setIsBookLookupLoading(false);
+        }
+      }
+    }, 900);
+
+    return () => {
+      clearTimeout(lookupTimer);
+    };
+  }, [bookTitle, screen]);
 
   useEffect(() => {
     if (screen !== "ritual") return;
@@ -686,6 +798,9 @@ export default function HomeScreen() {
           COMPLETED_BOOKS_KEY,
         );
         const savedCurrentBook = await AsyncStorage.getItem(CURRENT_BOOK_KEY);
+        const savedCurrentBookMetadata = await AsyncStorage.getItem(
+          CURRENT_BOOK_METADATA_KEY,
+        );
         const savedHasSeenWelcome = await AsyncStorage.getItem(HAS_SEEN_WELCOME_KEY);
         const savedActiveSessionStartTime = await AsyncStorage.getItem(
           ACTIVE_SESSION_START_KEY,
@@ -780,6 +895,10 @@ export default function HomeScreen() {
         if (savedCurrentBook !== null) {
           setCurrentBookTitle(savedCurrentBook);
           setBookTitle(savedCurrentBook);
+        }
+
+        if (savedCurrentBookMetadata !== null) {
+          setCurrentBookMetadata(JSON.parse(savedCurrentBookMetadata));
         }
       } catch (error) {
         console.log("Failed to load Rousd data:", error);
@@ -929,10 +1048,33 @@ export default function HomeScreen() {
     }
   };
 
-  const saveSession = async (title: string) => {
+  const handleBookTitleChange = (nextTitle: string) => {
+    setBookTitle(nextTitle);
+
+    if (selectedBookMetadata && nextTitle.trim() !== selectedBookMetadata.title) {
+      setSelectedBookMetadata(null);
+    }
+  };
+
+  const selectGoogleBook = (book: BookMetadata) => {
+    setSelectedBookMetadata(book);
+    setBookTitle(book.title);
+  };
+
+  const saveSession = async (
+    title: string,
+    bookMetadata?: BookMetadata | BookMetadataFields | null,
+  ) => {
     const sessionSeconds = pendingSessionSeconds;
     const sessionMinutes = (sessionSeconds / 60).toFixed(1);
     const sessionDuration = formatDuration(sessionSeconds / 60);
+    const metadataFields = bookMetadata
+      ? "title" in bookMetadata
+        ? getBookMetadataFields(bookMetadata)
+        : bookMetadata
+      : title === "Unassigned reading"
+        ? {}
+        : ({ bookSource: "manual" } satisfies BookMetadataFields);
 
     const newSession: ReadingSession = {
       id: Date.now().toString(),
@@ -940,6 +1082,7 @@ export default function HomeScreen() {
       minutes: sessionMinutes,
       createdAt: new Date().toISOString(),
       source: "timed",
+      ...metadataFields,
     };
 
     const updatedSessions = [newSession, ...recentSessions];
@@ -986,6 +1129,7 @@ export default function HomeScreen() {
       sessionMinutes: sessionDuration,
       ctaText: revealCopy.ctaText,
       source: "timed",
+      ...metadataFields,
     });
 
     return {
@@ -999,8 +1143,27 @@ export default function HomeScreen() {
     const validBookTitle = getValidBookTitle(bookTitle);
     const titleToSave = validBookTitle || "Unassigned reading";
     const shouldCompleteBook = showBookCompletedInput && Boolean(validBookTitle);
+    const selectedMetadata =
+      validBookTitle && selectedBookMetadata?.title === validBookTitle
+        ? selectedBookMetadata
+        : null;
+    const preservedCurrentBookMetadata =
+      validBookTitle &&
+      currentBookTitle === validBookTitle &&
+      currentBookMetadata
+        ? currentBookMetadata
+        : null;
+    const bookMetadataFields = validBookTitle
+      ? selectedMetadata
+        ? getBookMetadataFields(selectedMetadata)
+        : preservedCurrentBookMetadata ??
+          ({ bookSource: "manual" } satisfies BookMetadataFields)
+      : {};
+    const completedBookMetadataFields = selectedMetadata
+      ? getBookMetadataFields(selectedMetadata)
+      : preservedCurrentBookMetadata ?? {};
 
-    const savedSession = await saveSession(titleToSave);
+    const savedSession = await saveSession(titleToSave, bookMetadataFields);
 
     if (showBookCompletedInput && !validBookTitle) {
       console.warn(
@@ -1021,13 +1184,20 @@ export default function HomeScreen() {
         sessionMinutes: savedSession.sessionMinutes,
         totalBookMinutes: bookStats.totalMinutes.toFixed(1),
         sessionCount: bookStats.sessionCount,
+        ...completedBookMetadataFields,
       });
       setSanctuaryReveal(null);
     }
 
     if (validBookTitle) {
       setCurrentBookTitle(validBookTitle);
+      setCurrentBookMetadata(bookMetadataFields);
+      setHasCurrentBookCoverError(false);
       await AsyncStorage.setItem(CURRENT_BOOK_KEY, validBookTitle);
+      await AsyncStorage.setItem(
+        CURRENT_BOOK_METADATA_KEY,
+        JSON.stringify(bookMetadataFields),
+      );
     }
 
     if (validBookTitle) {
@@ -1037,6 +1207,8 @@ export default function HomeScreen() {
     }
 
     setShowBookCompletedInput(false);
+    setSelectedBookMetadata(null);
+    setBookLookupResults([]);
     setScreen(shouldCompleteBook ? "completedBook" : "reveal");
 
     setTimeout(() => {
@@ -1050,6 +1222,8 @@ export default function HomeScreen() {
     setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
     setShowBookCompletedInput(false);
     setCompletedBookReview("");
+    setSelectedBookMetadata(null);
+    setBookLookupResults([]);
     setScreen("reveal");
 
     setTimeout(() => {
@@ -1064,6 +1238,7 @@ export default function HomeScreen() {
     sessionCount: number,
     sessionId: string,
     reviewOverride = completedBookReview,
+    bookMetadataFields: BookMetadataFields = {},
   ) => {
     const trimmedReview = reviewOverride.trim();
     const savedCompletedBooks = await AsyncStorage.getItem(COMPLETED_BOOKS_KEY);
@@ -1079,6 +1254,7 @@ export default function HomeScreen() {
       sessionMinutes,
       totalBookMinutes,
       sessionCount,
+      ...bookMetadataFields,
     };
 
     const updatedSessions = recentSessions.map((session) =>
@@ -1112,6 +1288,7 @@ export default function HomeScreen() {
       completedBookMoment.sessionCount,
       completedBookMoment.sessionId,
       reviewOverride ?? completedBookReview,
+      completedBookMoment,
     );
 
     setCompletedBookReview("");
@@ -1208,8 +1385,19 @@ export default function HomeScreen() {
     setScreen("reveal");
 
     if (trimmedTitle) {
+      const manualCurrentMetadata =
+        trimmedTitle === currentBookTitle && currentBookMetadata
+          ? currentBookMetadata
+          : ({ bookSource: "manual" } satisfies BookMetadataFields);
+
       setCurrentBookTitle(trimmedTitle);
+      setCurrentBookMetadata(manualCurrentMetadata);
+      setHasCurrentBookCoverError(false);
       await AsyncStorage.setItem(CURRENT_BOOK_KEY, trimmedTitle);
+      await AsyncStorage.setItem(
+        CURRENT_BOOK_METADATA_KEY,
+        JSON.stringify(manualCurrentMetadata),
+      );
     }
 
     await AsyncStorage.multiSet([
@@ -1268,11 +1456,23 @@ export default function HomeScreen() {
   const hasPlacedBook = Boolean(currentBookTitle || latestSession);
   const currentBookDisplayTitle =
     currentBookTitle || latestSession?.title || "Your next book";
+  const latestSessionMatchesCurrentBook =
+    Boolean(currentBookTitle && latestSession?.title === currentBookTitle);
+  const currentBookDisplayMetadata =
+    currentBookTitle && currentBookMetadata
+      ? currentBookMetadata
+      : latestSessionMatchesCurrentBook || !currentBookTitle
+        ? latestSession ?? null
+        : null;
+  const currentBookCoverUrl = currentBookDisplayMetadata?.coverUrl ?? null;
+  const shouldShowCurrentBookCoverImage =
+    Boolean(currentBookCoverUrl) && !hasCurrentBookCoverError;
   const currentBookMeta = currentBookTitle
-    ? latestSession?.title === currentBookTitle
+    ? latestSessionMatchesCurrentBook
       ? `Last read ${formatSessionTimestamp(latestSession.createdAt)}`
       : "Saved as your current book"
     : "Save a session to place a book here";
+  const startHeroTitle = "Start a quiet session";
   const readingPlaceContinuityCopy = hasPlacedBook
     ? "Your book is waiting."
     : "Your first book can live here.";
@@ -1516,6 +1716,11 @@ export default function HomeScreen() {
     case "bookInput": {
       const pendingDuration = formatDuration(pendingSessionSeconds / 60);
       const canCompleteBook = Boolean(getValidBookTitle(bookTitle));
+      const bookLookupQueryIsReady = bookTitle.trim().length >= 4;
+      const bookLookupIsResting = bookLookupStatus === "rateLimited";
+      const shouldShowBookLookup =
+        bookLookupQueryIsReady &&
+        (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
 
       return (
       <ThemedView
@@ -1554,13 +1759,90 @@ export default function HomeScreen() {
                 placeholder="Book title"
                 placeholderTextColor="rgba(31,41,51,0.38)"
                 value={bookTitle}
-                onChangeText={setBookTitle}
+                onChangeText={handleBookTitleChange}
                 style={styles.bookAttributionInput}
                 returnKeyType="done"
                 onSubmitEditing={saveBookForSession}
               />
             </View>
           </View>
+
+          {shouldShowBookLookup ? (
+            <View style={styles.bookLookupPanel}>
+              <View style={styles.bookLookupHeaderRow}>
+                <ThemedText style={styles.bookLookupTitle}>
+                  Possible matches
+                </ThemedText>
+                {isBookLookupLoading ? (
+                  <ThemedText style={styles.bookLookupLoading}>
+                    Looking softly...
+                  </ThemedText>
+                ) : null}
+              </View>
+
+              {bookLookupResults.map((book) => {
+                const isSelected =
+                  selectedBookMetadata?.googleBooksId === book.googleBooksId;
+
+                return (
+                  <Pressable
+                    key={book.googleBooksId ?? book.title}
+                    style={({ pressed }) => [
+                      styles.bookLookupChoice,
+                      isSelected && styles.bookLookupChoiceSelected,
+                      pressed && styles.buttonPressed,
+                    ]}
+                    onPress={() => selectGoogleBook(book)}
+                  >
+                    {book.coverUrl ? (
+                      <Image
+                        source={{ uri: book.coverUrl }}
+                        style={styles.bookLookupCover}
+                      />
+                    ) : (
+                      <View style={styles.bookLookupCoverPlaceholder}>
+                        <ThemedText style={styles.bookLookupCoverText}>
+                          R
+                        </ThemedText>
+                      </View>
+                    )}
+                    <View style={styles.bookLookupCopy}>
+                      <ThemedText
+                        style={styles.bookLookupBookTitle}
+                        numberOfLines={1}
+                      >
+                        {book.title}
+                      </ThemedText>
+                      {book.author ? (
+                        <ThemedText
+                          style={styles.bookLookupBookAuthor}
+                          numberOfLines={1}
+                        >
+                          {book.author}
+                        </ThemedText>
+                      ) : null}
+                    </View>
+                  </Pressable>
+                );
+              })}
+
+              {!isBookLookupLoading &&
+              hasBookLookupSearched &&
+              bookLookupResults.length === 0 ? (
+                <ThemedText style={styles.bookLookupEmptyText}>
+                  {bookLookupIsResting
+                    ? "Book lookup is resting. You can keep this title."
+                    : "No matches found. You can keep this title."}
+                </ThemedText>
+              ) : null}
+
+              {bookLookupResults.length > 0 ? (
+                <ThemedText style={styles.bookLookupAttribution}>
+                  Book data from Google Books
+                </ThemedText>
+              ) : null}
+            </View>
+          ) : null}
 
           {visibleSessions.length > 0 && (
             <View style={styles.recentBookPicker}>
@@ -1572,7 +1854,7 @@ export default function HomeScreen() {
                     styles.recentBookChoice,
                     pressed && styles.buttonPressed,
                   ]}
-                  onPress={() => setBookTitle(session.title)}
+                  onPress={() => handleBookTitleChange(session.title)}
                 >
                   <View style={styles.recentBookMiniCover}>
                     <ThemedText style={styles.recentBookMiniCoverText}>R</ThemedText>
@@ -1989,6 +2271,9 @@ export default function HomeScreen() {
       const allowsSessionReflection = sanctuaryReveal.source === "timed";
       const hasSessionReflection =
         allowsSessionReflection && sessionReflection.trim().length > 0;
+      const revealCoverUrl = sanctuaryReveal.coverUrl ?? null;
+      const shouldShowRevealCoverImage =
+        Boolean(revealCoverUrl) && !hasRevealCoverError;
 
       return (
       <ThemedView
@@ -2032,14 +2317,28 @@ export default function HomeScreen() {
                 { transform: [{ scale: revealSceneScale }] },
               ]}
             >
-              <View style={styles.bookRevealCover}>
-                <ThemedText
-                  style={styles.bookRevealCoverTitle}
-                  numberOfLines={1}
-                  ellipsizeMode="tail"
-                >
-                  {revealBookTitle}
-                </ThemedText>
+              <View
+                style={[
+                  styles.bookRevealCover,
+                  shouldShowRevealCoverImage && styles.bookRevealCoverWithImage,
+                ]}
+              >
+                {shouldShowRevealCoverImage && revealCoverUrl ? (
+                  <Image
+                    source={{ uri: revealCoverUrl }}
+                    style={styles.bookRevealCoverImage}
+                    resizeMode="cover"
+                    onError={() => setHasRevealCoverError(true)}
+                  />
+                ) : (
+                  <ThemedText
+                    style={styles.bookRevealCoverTitle}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {revealBookTitle}
+                  </ThemedText>
+                )}
               </View>
               <View style={styles.bookRevealTextBlock}>
                 <ThemedText style={styles.bookRevealLabel}>Saved to your reading place</ThemedText>
@@ -2401,14 +2700,28 @@ export default function HomeScreen() {
           </ThemedText>
 
           <View style={styles.bookShrineShelf}>
-            <View style={styles.bookShrineCover}>
-              <ThemedText
-                style={styles.bookShrineCoverTitle}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
-                {currentBookDisplayTitle}
-              </ThemedText>
+            <View
+              style={[
+                styles.bookShrineCover,
+                shouldShowCurrentBookCoverImage && styles.bookShrineCoverWithImage,
+              ]}
+            >
+              {shouldShowCurrentBookCoverImage && currentBookCoverUrl ? (
+                <Image
+                  source={{ uri: currentBookCoverUrl }}
+                  style={styles.bookShrineCoverImage}
+                  resizeMode="cover"
+                  onError={() => setHasCurrentBookCoverError(true)}
+                />
+              ) : (
+                <ThemedText
+                  style={styles.bookShrineCoverTitle}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {currentBookDisplayTitle}
+                </ThemedText>
+              )}
             </View>
             <View style={styles.bookShrineLantern}>
               <View style={styles.bookShrineLanternGlow} />
@@ -2450,7 +2763,7 @@ export default function HomeScreen() {
                 adjustsFontSizeToFit
                 minimumFontScale={0.88}
               >
-                Start Reading
+                {startHeroTitle}
               </ThemedText>
             </View>
             <View style={styles.startHeroArrowCircle}>
@@ -2458,6 +2771,11 @@ export default function HomeScreen() {
             </View>
           </View>
         </Pressable>
+        {currentBookTitle ? (
+          <ThemedText style={styles.startHeroHelper}>
+            Choose what you read when you return.
+          </ThemedText>
+        ) : null}
 
         <Pressable
           style={({ pressed }) => [
@@ -4902,6 +5220,18 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.16,
     shadowRadius: 20,
     elevation: 6,
+    overflow: "hidden",
+  },
+  bookShrineCoverWithImage: {
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    backgroundColor: "rgba(240,235,224,0.72)",
+  },
+  bookShrineCoverImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 11,
+    backgroundColor: "#1E3E32",
   },
   bookShrineCoverTitle: {
     color: "#F7F3EA",
@@ -5150,6 +5480,102 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     padding: 0,
   },
+  bookLookupPanel: {
+    marginTop: 14,
+    backgroundColor: "rgba(255,255,255,0.48)",
+    borderRadius: 22,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.06)",
+  },
+  bookLookupHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    backgroundColor: "transparent",
+    marginBottom: 6,
+  },
+  bookLookupTitle: {
+    color: "rgba(31,41,51,0.58)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
+  },
+  bookLookupLoading: {
+    color: "rgba(31,41,51,0.42)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontStyle: "italic",
+  },
+  bookLookupChoice: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "transparent",
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(47,93,80,0.05)",
+  },
+  bookLookupChoiceSelected: {
+    opacity: 0.78,
+  },
+  bookLookupCover: {
+    width: 34,
+    height: 48,
+    borderRadius: 5,
+    backgroundColor: "rgba(47,93,80,0.12)",
+  },
+  bookLookupCoverPlaceholder: {
+    width: 34,
+    height: 48,
+    borderRadius: 5,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(47,93,80,0.12)",
+  },
+  bookLookupCoverText: {
+    color: colors.accent,
+    fontSize: 14,
+    lineHeight: 19,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
+  },
+  bookLookupCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  bookLookupBookTitle: {
+    color: colors.text,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: "700",
+  },
+  bookLookupBookAuthor: {
+    color: colors.mutedText,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "500",
+    marginTop: 2,
+  },
+  bookLookupEmptyText: {
+    color: "rgba(31,41,51,0.48)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontStyle: "italic",
+    paddingVertical: 8,
+  },
+  bookLookupAttribution: {
+    color: "rgba(31,41,51,0.38)",
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: 8,
+    textAlign: "right",
+  },
   recentBookPicker: {
     marginTop: 18,
     backgroundColor: "rgba(255,255,255,0.54)",
@@ -5360,6 +5786,17 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: 9,
+    overflow: "hidden",
+  },
+  bookRevealCoverWithImage: {
+    padding: 0,
+    backgroundColor: "rgba(240,235,224,0.72)",
+  },
+  bookRevealCoverImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 9,
+    backgroundColor: "#1E3E32",
   },
   bookRevealCoverTitle: {
     color: "#F7F3EA",
@@ -5629,6 +6066,15 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontWeight: "700",
     fontStyle: "italic",
+  },
+  startHeroHelper: {
+    color: "rgba(31,41,51,0.48)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "500",
+    marginTop: 8,
+    marginBottom: 8,
+    textAlign: "center",
   },
 });
 

@@ -2,6 +2,15 @@ import type { BookMetadata } from "@/types/book";
 
 const GOOGLE_BOOKS_VOLUME_SEARCH_URL = "https://www.googleapis.com/books/v1/volumes";
 const GOOGLE_BOOKS_MAX_RESULTS = 5;
+const googleBooksResultCache = new Map<string, BookMetadata[]>();
+let lastLookupStatus: GoogleBooksLookupStatus = "idle";
+
+export type GoogleBooksLookupStatus =
+  | "idle"
+  | "ok"
+  | "empty"
+  | "rateLimited"
+  | "error";
 
 type GoogleBooksIndustryIdentifier = {
   type?: string;
@@ -31,8 +40,13 @@ type GoogleBooksVolume = {
 };
 
 type GoogleBooksSearchResponse = {
+  totalItems?: number;
   items?: GoogleBooksVolume[];
 };
+
+export function getLastGoogleBooksLookupStatus(): GoogleBooksLookupStatus {
+  return lastLookupStatus;
+}
 
 const normalizeCoverUrl = (url?: string): string | null => {
   if (!url) {
@@ -63,13 +77,22 @@ const getIsbn = (
 ): string | null =>
   identifiers?.find((identifier) => identifier.type === type)?.identifier ?? null;
 
-const normalizeGoogleBook = (volume: GoogleBooksVolume): BookMetadata | null => {
+const getGoogleBookSkipReason = (volume: GoogleBooksVolume): string | null => {
   const volumeInfo = volume.volumeInfo;
   const title = volumeInfo?.title?.trim();
 
-  if (!volume.id || !title) {
-    return null;
-  }
+  if (!title) return "missing title";
+
+  return null;
+};
+
+const normalizeGoogleBook = (volume: GoogleBooksVolume): BookMetadata | null => {
+  const skipReason = getGoogleBookSkipReason(volume);
+
+  if (skipReason) return null;
+
+  const volumeInfo = volume.volumeInfo;
+  const title = volumeInfo?.title?.trim() ?? "";
 
   const subtitle = volumeInfo?.subtitle?.trim();
   const fullTitle = subtitle ? `${title}: ${subtitle}` : title;
@@ -88,36 +111,82 @@ const normalizeGoogleBook = (volume: GoogleBooksVolume): BookMetadata | null => 
 
 export async function searchGoogleBooks(query: string): Promise<BookMetadata[]> {
   const trimmedQuery = query.trim();
+  const normalizedQuery = trimmedQuery.toLowerCase();
 
   if (!trimmedQuery) {
+    lastLookupStatus = "idle";
     return [];
   }
 
-  const params = new URLSearchParams({
-    q: trimmedQuery,
-    maxResults: String(GOOGLE_BOOKS_MAX_RESULTS),
-    printType: "books",
-  });
+  const cachedResults = googleBooksResultCache.get(normalizedQuery);
 
-  // TODO: Add a public Expo env key here if quota needs require it later.
-  const url = `${GOOGLE_BOOKS_VOLUME_SEARCH_URL}?${params.toString()}`;
+  if (cachedResults) {
+    lastLookupStatus = cachedResults.length > 0 ? "ok" : "empty";
+    return cachedResults;
+  }
 
   try {
+    const apiKey = process.env.EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY;
+    const hasApiKey = Boolean(apiKey);
+    // Optional public Expo key for quota management only. Do not hardcode secrets here.
+    const url =
+      `${GOOGLE_BOOKS_VOLUME_SEARCH_URL}?` +
+      `q=${encodeURIComponent(trimmedQuery)}` +
+      `&maxResults=${GOOGLE_BOOKS_MAX_RESULTS}` +
+      "&printType=books" +
+      (apiKey ? `&key=${encodeURIComponent(apiKey)}` : "");
+
+    if (__DEV__) {
+      const debugUrl =
+        `${GOOGLE_BOOKS_VOLUME_SEARCH_URL}?` +
+        `q=${encodeURIComponent(trimmedQuery)}` +
+        `&maxResults=${GOOGLE_BOOKS_MAX_RESULTS}` +
+        "&printType=books" +
+        (hasApiKey ? "&key=[REDACTED]" : "");
+
+      console.log(`[Rousd Google Books debug] API key present: ${hasApiKey}`);
+      console.log(`[Rousd Google Books debug] request URL: ${debugUrl}`);
+    }
+
     const response = await fetch(url);
 
     if (!response.ok) {
+      if (response.status === 429) {
+        lastLookupStatus = "rateLimited";
+        console.warn("Google Books lookup rate limited; manual book entry remains available.");
+        return [];
+      }
+
+      lastLookupStatus = "error";
       console.warn(`Google Books lookup failed with status ${response.status}`);
       return [];
     }
 
     const data = (await response.json()) as GoogleBooksSearchResponse;
+    const rawItems = data.items ?? [];
 
-    return (
-      data.items
-        ?.map(normalizeGoogleBook)
-        .filter((book): book is BookMetadata => book !== null) ?? []
-    );
+    const results = rawItems
+      .map(normalizeGoogleBook)
+      .filter((book): book is BookMetadata => book !== null);
+
+    if (__DEV__) {
+      const firstSkippedItem = rawItems.find((item) => getGoogleBookSkipReason(item));
+      const firstSkipReason = firstSkippedItem
+        ? getGoogleBookSkipReason(firstSkippedItem)
+        : null;
+
+      if (firstSkipReason) {
+        console.log(
+          `[Rousd Google Books debug] first skipped item: ${firstSkipReason}`,
+        );
+      }
+    }
+
+    googleBooksResultCache.set(normalizedQuery, results);
+    lastLookupStatus = results.length > 0 ? "ok" : "empty";
+    return results;
   } catch (error) {
+    lastLookupStatus = "error";
     console.warn("Google Books lookup failed", error);
     return [];
   }
