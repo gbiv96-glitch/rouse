@@ -398,6 +398,11 @@ export default function HomeScreen() {
   const [hasBookLookupSearched, setHasBookLookupSearched] = useState(false);
   const [bookLookupStatus, setBookLookupStatus] =
     useState<GoogleBooksLookupStatus>("idle");
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [isBookInputFocused, setIsBookInputFocused] = useState(false);
+  const [bookLookupPanelY, setBookLookupPanelY] = useState<number | null>(null);
+  const [hasBookAttributionCoverError, setHasBookAttributionCoverError] =
+    useState(false);
   const [sanctuaryReveal, setSanctuaryReveal] =
     useState<SanctuaryReveal | null>(null);
   const [hasRevealCoverError, setHasRevealCoverError] = useState(false);
@@ -420,8 +425,17 @@ export default function HomeScreen() {
   const revealScale = useRef(new Animated.Value(0.96)).current;
   const revealTranslateY = useRef(new Animated.Value(18)).current;
   const revealSceneScale = useRef(new Animated.Value(0.98)).current;
+  const bookInputScrollRef = useRef<ScrollView | null>(null);
   const bookLookupRequestId = useRef(0);
   const lastBookLookupQuery = useRef<string | null>(null);
+  const bookLookupAutoScrollKey = useRef<string | null>(null);
+  const bookInputWasManuallyScrolled = useRef(false);
+  const revealReflectionScrollRef = useRef<ScrollView | null>(null);
+  const revealReflectionInputY = useRef<number | null>(null);
+  const revealReflectionDidAutoScroll = useRef(false);
+  const completedBookScrollRef = useRef<ScrollView | null>(null);
+  const completedBookReflectionInputY = useRef<number | null>(null);
+  const completedBookReflectionDidAutoScroll = useRef(false);
   const completedBookPromptIndex = useRef(
     Math.floor(Math.random() * completedBookReflectionPrompts.length),
   ).current;
@@ -456,11 +470,45 @@ export default function HomeScreen() {
   }, [completedBookMoment, sanctuaryReveal, screen]);
 
   useEffect(() => {
+    const keyboardShowEvent =
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const keyboardHideEvent =
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const showSubscription = Keyboard.addListener(keyboardShowEvent, () => {
+      setIsKeyboardVisible(true);
+    });
+    const hideSubscription = Keyboard.addListener(keyboardHideEvent, () => {
+      setIsKeyboardVisible(false);
+    });
+
+    return () => {
+      showSubscription.remove();
+      hideSubscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
     if (showBookCompletedInput && !getValidBookTitle(bookTitle)) {
       setShowBookCompletedInput(false);
       setCompletedBookReview("");
     }
   }, [bookTitle, showBookCompletedInput]);
+
+  useEffect(() => {
+    if (screen !== "bookInput") {
+      setIsBookInputFocused(false);
+      bookLookupAutoScrollKey.current = null;
+      bookInputWasManuallyScrolled.current = false;
+    }
+
+    if (screen !== "reveal") {
+      revealReflectionDidAutoScroll.current = false;
+    }
+
+    if (screen !== "completedBook") {
+      completedBookReflectionDidAutoScroll.current = false;
+    }
+  }, [screen]);
 
   useEffect(() => {
     setHasCurrentBookCoverError(false);
@@ -469,6 +517,10 @@ export default function HomeScreen() {
   useEffect(() => {
     setHasRevealCoverError(false);
   }, [sanctuaryReveal?.coverUrl]);
+
+  useEffect(() => {
+    setHasBookAttributionCoverError(false);
+  }, [bookTitle, currentBookMetadata?.coverUrl, selectedBookMetadata?.coverUrl]);
 
   useEffect(() => {
     if (screen !== "bookInput") {
@@ -536,6 +588,51 @@ export default function HomeScreen() {
       clearTimeout(lookupTimer);
     };
   }, [bookTitle, screen]);
+
+  useEffect(() => {
+    const trimmedQuery = bookTitle.trim().toLowerCase();
+    const canAutoPositionLookup =
+      screen === "bookInput" &&
+      isBookInputFocused &&
+      isKeyboardVisible &&
+      bookLookupPanelY !== null &&
+      trimmedQuery.length >= 4 &&
+      hasBookLookupSearched &&
+      !isBookLookupLoading;
+
+    if (!canAutoPositionLookup || bookInputWasManuallyScrolled.current) {
+      return;
+    }
+
+    const autoScrollKey = `${trimmedQuery}:${bookLookupResults.length}:${bookLookupStatus}`;
+
+    if (bookLookupAutoScrollKey.current === autoScrollKey) {
+      return;
+    }
+
+    bookLookupAutoScrollKey.current = autoScrollKey;
+
+    const scrollTimer = setTimeout(() => {
+      bookInputScrollRef.current?.scrollTo({
+        y: Math.max(bookLookupPanelY - 148, 0),
+        animated: true,
+      });
+    }, 120);
+
+    return () => {
+      clearTimeout(scrollTimer);
+    };
+  }, [
+    bookLookupPanelY,
+    bookLookupResults.length,
+    bookLookupStatus,
+    bookTitle,
+    hasBookLookupSearched,
+    isBookInputFocused,
+    isBookLookupLoading,
+    isKeyboardVisible,
+    screen,
+  ]);
 
   useEffect(() => {
     if (screen !== "ritual") return;
@@ -1049,6 +1146,11 @@ export default function HomeScreen() {
   };
 
   const handleBookTitleChange = (nextTitle: string) => {
+    if (nextTitle.trim().toLowerCase() !== bookTitle.trim().toLowerCase()) {
+      bookInputWasManuallyScrolled.current = false;
+      bookLookupAutoScrollKey.current = null;
+    }
+
     setBookTitle(nextTitle);
 
     if (selectedBookMetadata && nextTitle.trim() !== selectedBookMetadata.title) {
@@ -1716,11 +1818,30 @@ export default function HomeScreen() {
     case "bookInput": {
       const pendingDuration = formatDuration(pendingSessionSeconds / 60);
       const canCompleteBook = Boolean(getValidBookTitle(bookTitle));
+      const validBookTitle = getValidBookTitle(bookTitle);
       const bookLookupQueryIsReady = bookTitle.trim().length >= 4;
       const bookLookupIsResting = bookLookupStatus === "rateLimited";
       const shouldShowBookLookup =
         bookLookupQueryIsReady &&
         (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
+      const bookInputBottomPadding =
+        insets.bottom + (isKeyboardVisible ? 180 : 80);
+      const selectedBookAttributionMetadata =
+        validBookTitle && selectedBookMetadata?.title === validBookTitle
+          ? selectedBookMetadata
+          : null;
+      const currentBookAttributionMetadata =
+        validBookTitle &&
+        currentBookTitle === validBookTitle &&
+        currentBookMetadata
+          ? currentBookMetadata
+          : null;
+      const bookAttributionCoverUrl =
+        selectedBookAttributionMetadata?.coverUrl ??
+        currentBookAttributionMetadata?.coverUrl ??
+        null;
+      const shouldShowBookAttributionCover =
+        Boolean(bookAttributionCoverUrl) && !hasBookAttributionCoverError;
 
       return (
       <ThemedView
@@ -1731,14 +1852,25 @@ export default function HomeScreen() {
 
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
-          style={{ flex: 1 }}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
+          style={styles.bookReturnKeyboardView}
         >
         <ScrollView
-          keyboardShouldPersistTaps="handled"
+          ref={bookInputScrollRef}
+          style={styles.bookReturnScrollView}
+          keyboardShouldPersistTaps="always"
           keyboardDismissMode="interactive"
+          showsVerticalScrollIndicator={false}
+          onScrollBeginDrag={() => {
+            bookInputWasManuallyScrolled.current = true;
+          }}
           contentContainerStyle={[
             styles.bookReturnContent,
-            { paddingBottom: insets.bottom + 80 },
+            shouldShowBookLookup && styles.bookReturnContentWithLookup,
+            shouldShowBookLookup &&
+              isKeyboardVisible &&
+              styles.bookReturnContentWithKeyboardLookup,
+            { paddingBottom: bookInputBottomPadding },
           ]}
         >
           <ThemedText style={styles.bookReturnEyebrow}>Welcome back</ThemedText>
@@ -1751,7 +1883,16 @@ export default function HomeScreen() {
 
           <View style={styles.bookAttributionCard}>
             <View style={styles.bookAttributionCover}>
-              <ThemedText style={styles.bookAttributionCoverText}>R</ThemedText>
+              {shouldShowBookAttributionCover && bookAttributionCoverUrl ? (
+                <Image
+                  source={{ uri: bookAttributionCoverUrl }}
+                  style={styles.bookAttributionCoverImage}
+                  resizeMode="cover"
+                  onError={() => setHasBookAttributionCoverError(true)}
+                />
+              ) : (
+                <ThemedText style={styles.bookAttributionCoverText}>R</ThemedText>
+              )}
             </View>
             <View style={styles.bookAttributionCopy}>
               <ThemedText style={styles.bookAttributionLabel}>Save this session to</ThemedText>
@@ -1763,12 +1904,23 @@ export default function HomeScreen() {
                 style={styles.bookAttributionInput}
                 returnKeyType="done"
                 onSubmitEditing={saveBookForSession}
+                onFocus={() => {
+                  setIsBookInputFocused(true);
+                  bookInputWasManuallyScrolled.current = false;
+                  bookLookupAutoScrollKey.current = null;
+                }}
+                onBlur={() => setIsBookInputFocused(false)}
               />
             </View>
           </View>
 
           {shouldShowBookLookup ? (
-            <View style={styles.bookLookupPanel}>
+            <View
+              style={styles.bookLookupPanel}
+              onLayout={(event) => {
+                setBookLookupPanelY(event.nativeEvent.layout.y);
+              }}
+            >
               <View style={styles.bookLookupHeaderRow}>
                 <ThemedText style={styles.bookLookupTitle}>
                   Possible matches
@@ -2107,22 +2259,26 @@ export default function HomeScreen() {
           : `You read it across ${daysCount} days.`;
       const completedBookSessionLabel =
         completedBookMoment.sessionCount === 1 ? "SESSION" : "SESSIONS";
+      const completedBookBottomPadding =
+        insets.bottom + (isKeyboardVisible ? 176 : 96);
 
       return (
       <ThemedView style={styles.completedBookScreen}>
         <KeyboardAvoidingView
           style={styles.completedBookKeyboardView}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
         >
           <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <ScrollView
+              ref={completedBookScrollRef}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="interactive"
               contentContainerStyle={[
                 styles.completedBookRevealContent,
                 {
                   paddingTop: insets.top + 30,
-                  paddingBottom: insets.bottom + 96,
+                  paddingBottom: completedBookBottomPadding,
                 },
               ]}
             >
@@ -2205,7 +2361,12 @@ export default function HomeScreen() {
             {`${completedBookDaysLine}\nIt will stay in your reading life.`}
           </ThemedText>
 
-          <View style={styles.completedBookReflectionWrap}>
+          <View
+            style={styles.completedBookReflectionWrap}
+            onLayout={(event) => {
+              completedBookReflectionInputY.current = event.nativeEvent.layout.y;
+            }}
+          >
             <ThemedText style={styles.completedBookReflectionLabel}>
               {reflectionPrompt}
             </ThemedText>
@@ -2219,6 +2380,25 @@ export default function HomeScreen() {
               returnKeyType="done"
               blurOnSubmit
               onSubmitEditing={Keyboard.dismiss}
+              onFocus={() => {
+                if (completedBookReflectionDidAutoScroll.current) {
+                  return;
+                }
+
+                completedBookReflectionDidAutoScroll.current = true;
+                const inputY = completedBookReflectionInputY.current;
+
+                if (inputY === null) {
+                  return;
+                }
+
+                setTimeout(() => {
+                  completedBookScrollRef.current?.scrollTo({
+                    y: Math.max(inputY - 84, 0),
+                    animated: true,
+                  });
+                }, 180);
+              }}
               textAlignVertical="top"
             />
           </View>
@@ -2274,6 +2454,8 @@ export default function HomeScreen() {
       const revealCoverUrl = sanctuaryReveal.coverUrl ?? null;
       const shouldShowRevealCoverImage =
         Boolean(revealCoverUrl) && !hasRevealCoverError;
+      const bookRevealBottomPadding =
+        insets.bottom + (isKeyboardVisible ? 176 : 96);
 
       return (
       <ThemedView
@@ -2285,6 +2467,7 @@ export default function HomeScreen() {
         <KeyboardAvoidingView
           style={styles.completedBookKeyboardView}
           behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
         >
           <Animated.View
             style={[
@@ -2299,11 +2482,12 @@ export default function HomeScreen() {
             ]}
           >
           <ScrollView
+            ref={revealReflectionScrollRef}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="interactive"
             contentContainerStyle={[
               styles.bookRevealContent,
-              { paddingBottom: insets.bottom + 96 },
+              { paddingBottom: bookRevealBottomPadding },
             ]}
           >
             <ThemedText style={styles.bookRevealEyebrow}>Session saved</ThemedText>
@@ -2352,7 +2536,12 @@ export default function HomeScreen() {
             </Animated.View>
 
             {allowsSessionReflection && (
-              <View style={styles.sessionReflectionWrap}>
+              <View
+                style={styles.sessionReflectionWrap}
+                onLayout={(event) => {
+                  revealReflectionInputY.current = event.nativeEvent.layout.y;
+                }}
+              >
                 <ThemedText style={styles.sessionReflectionLabel}>
                   {"A note, if you'd like one."}
                 </ThemedText>
@@ -2365,6 +2554,25 @@ export default function HomeScreen() {
                   multiline
                   blurOnSubmit
                   onSubmitEditing={Keyboard.dismiss}
+                  onFocus={() => {
+                    if (revealReflectionDidAutoScroll.current) {
+                      return;
+                    }
+
+                    revealReflectionDidAutoScroll.current = true;
+                    const inputY = revealReflectionInputY.current;
+
+                    if (inputY === null) {
+                      return;
+                    }
+
+                    setTimeout(() => {
+                      revealReflectionScrollRef.current?.scrollTo({
+                        y: Math.max(inputY - 84, 0),
+                        animated: true,
+                      });
+                    }, 180);
+                  }}
                   textAlignVertical="top"
                 />
               </View>
@@ -5374,6 +5582,12 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
     overflow: "hidden",
   },
+  bookReturnKeyboardView: {
+    flex: 1,
+  },
+  bookReturnScrollView: {
+    flex: 1,
+  },
   bookReturnGlowTop: {
     position: "absolute",
     top: -90,
@@ -5397,6 +5611,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "transparent",
     paddingVertical: 36,
+  },
+  bookReturnContentWithLookup: {
+    justifyContent: "flex-start",
+  },
+  bookReturnContentWithKeyboardLookup: {
+    paddingTop: 22,
   },
   bookReturnEyebrow: {
     color: "rgba(47,93,80,0.62)",
@@ -5447,6 +5667,13 @@ const styles = StyleSheet.create({
     borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
+    backgroundColor: "#1E3E32",
+    overflow: "hidden",
+  },
+  bookAttributionCoverImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 9,
     backgroundColor: "#1E3E32",
   },
   bookAttributionCoverText: {
