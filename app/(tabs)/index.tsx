@@ -327,6 +327,10 @@ function getCompletedBookShelfDate(completedAt: string) {
   });
 }
 
+function getCompletedBookReviewText(book: CompletedBookReview) {
+  return typeof book.review === "string" ? book.review.trim() : "";
+}
+
 function getTimeAwareGreeting() {
   const hour = new Date().getHours();
 
@@ -383,9 +387,14 @@ export default function HomeScreen() {
   const [completedBookReview, setCompletedBookReview] = useState("");
   const [completedBookMoment, setCompletedBookMoment] =
     useState<CompletedBookMoment | null>(null);
+  const [hasCompletedBookCoverError, setHasCompletedBookCoverError] =
+    useState(false);
   const [completedBooks, setCompletedBooks] = useState<CompletedBookReview[]>(
     [],
   );
+  const [finishedBookCoverErrorIds, setFinishedBookCoverErrorIds] = useState<
+    string[]
+  >([]);
   const [manualLogMinutes, setManualLogMinutes] = useState("30");
   const [manualLogBookTitle, setManualLogBookTitle] = useState("");
   const [manualLogError, setManualLogError] = useState<string | null>(null);
@@ -517,6 +526,14 @@ export default function HomeScreen() {
   useEffect(() => {
     setHasRevealCoverError(false);
   }, [sanctuaryReveal?.coverUrl]);
+
+  useEffect(() => {
+    setHasCompletedBookCoverError(false);
+  }, [completedBookMoment?.coverUrl]);
+
+  useEffect(() => {
+    setFinishedBookCoverErrorIds([]);
+  }, [completedBooks]);
 
   useEffect(() => {
     setHasBookAttributionCoverError(false);
@@ -2259,6 +2276,9 @@ export default function HomeScreen() {
           : `You read it across ${daysCount} days.`;
       const completedBookSessionLabel =
         completedBookMoment.sessionCount === 1 ? "SESSION" : "SESSIONS";
+      const completedBookCoverUrl = completedBookMoment.coverUrl ?? null;
+      const shouldShowCompletedBookCoverImage =
+        Boolean(completedBookCoverUrl) && !hasCompletedBookCoverError;
       const completedBookBottomPadding =
         insets.bottom + (isKeyboardVisible ? 176 : 96);
 
@@ -2310,14 +2330,29 @@ export default function HomeScreen() {
                 ]}
               />
             ))}
-            <View style={styles.completedBookCover}>
-              <ThemedText
-                style={styles.completedBookCoverTitle}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
-                {completedBookMoment.title}
-              </ThemedText>
+            <View
+              style={[
+                styles.completedBookCover,
+                shouldShowCompletedBookCoverImage &&
+                  styles.completedBookCoverWithImage,
+              ]}
+            >
+              {shouldShowCompletedBookCoverImage && completedBookCoverUrl ? (
+                <Image
+                  source={{ uri: completedBookCoverUrl }}
+                  style={styles.completedBookCoverImage}
+                  resizeMode="cover"
+                  onError={() => setHasCompletedBookCoverError(true)}
+                />
+              ) : (
+                <ThemedText
+                  style={styles.completedBookCoverTitle}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {completedBookMoment.title}
+                </ThemedText>
+              )}
             </View>
           </View>
 
@@ -2773,15 +2808,34 @@ export default function HomeScreen() {
                         style={[
                           styles.finishedBookCover,
                           index % 2 === 1 && styles.finishedBookCoverAlt,
+                          book.coverUrl &&
+                            !finishedBookCoverErrorIds.includes(book.id) &&
+                            styles.finishedBookCoverWithImage,
                         ]}
                       >
-                        <ThemedText
-                          style={styles.finishedBookCoverTitle}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                        >
-                          {book.title}
-                        </ThemedText>
+                        {book.coverUrl &&
+                        !finishedBookCoverErrorIds.includes(book.id) ? (
+                          <Image
+                            source={{ uri: book.coverUrl }}
+                            style={styles.finishedBookCoverImage}
+                            resizeMode="cover"
+                            onError={() =>
+                              setFinishedBookCoverErrorIds((coverErrorIds) =>
+                                coverErrorIds.includes(book.id)
+                                  ? coverErrorIds
+                                  : [...coverErrorIds, book.id],
+                              )
+                            }
+                          />
+                        ) : (
+                          <ThemedText
+                            style={styles.finishedBookCoverTitle}
+                            numberOfLines={1}
+                            ellipsizeMode="tail"
+                          >
+                            {book.title}
+                          </ThemedText>
+                        )}
                       </View>
 
                       <View style={styles.finishedBookCopy}>
@@ -2801,12 +2855,12 @@ export default function HomeScreen() {
                           {book.sessionCount ?? 1}{" "}
                           {(book.sessionCount ?? 1) === 1 ? "session" : "sessions"}
                         </ThemedText>
-                        {book.review.trim() ? (
+                        {getCompletedBookReviewText(book).length > 0 ? (
                           <ThemedText
                             style={styles.finishedBookReview}
                             numberOfLines={2}
                           >
-                            {book.review.trim()}
+                            {getCompletedBookReviewText(book)}
                           </ThemedText>
                         ) : null}
                       </View>
@@ -4473,6 +4527,16 @@ const styles = StyleSheet.create({
   finishedBookCoverAlt: {
     backgroundColor: "#1E3A2C",
   },
+  finishedBookCoverWithImage: {
+    padding: 0,
+    overflow: "hidden",
+  },
+  finishedBookCoverImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 6,
+    backgroundColor: colors.sessionBackground,
+  },
   finishedBookCoverTitle: {
     color: "#F0EBE0",
     width: "100%",
@@ -6138,6 +6202,16 @@ const styles = StyleSheet.create({
     padding: 12,
     borderWidth: 1,
     borderColor: "rgba(240,235,224,0.12)",
+  },
+  completedBookCoverWithImage: {
+    padding: 0,
+    overflow: "hidden",
+  },
+  completedBookCoverImage: {
+    width: "100%",
+    height: "100%",
+    borderRadius: 11,
+    backgroundColor: "#173826",
   },
   completedBookCoverTitle: {
     color: "#F0EBE0",
