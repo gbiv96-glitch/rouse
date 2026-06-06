@@ -5,24 +5,48 @@
 
 import { Platform } from 'react-native';
 
-const tintColorLight = '#0a7ea4';
-const tintColorDark = '#fff';
+export const RousdPalette = {
+  parchment: '#F7F3EA',
+  paper: '#FFF8ED',
+  card: '#FFFFFF',
+  text: '#1F2933',
+  title: '#1B2A22',
+  muted: '#6B7280',
+  warmMuted: '#8A8578',
+  green: '#2F5D50',
+  greenDark: '#24483E',
+  greenDeep: '#1E3E32',
+  greenNight: '#1C2E25',
+  greenCover: '#173826',
+  sage: '#DDEBE4',
+  brass: '#C4945A',
+  danger: '#B4533A',
+};
+
+export const RousdRadii = {
+  control: 18,
+  card: 24,
+  largeCard: 28,
+};
+
+const tintColorLight = RousdPalette.green;
+const tintColorDark = RousdPalette.paper;
 
 export const Colors = {
   light: {
-    text: '#11181C',
-    background: '#fff',
+    text: RousdPalette.text,
+    background: RousdPalette.parchment,
     tint: tintColorLight,
-    icon: '#687076',
-    tabIconDefault: '#687076',
+    icon: RousdPalette.greenDark,
+    tabIconDefault: RousdPalette.muted,
     tabIconSelected: tintColorLight,
   },
   dark: {
-    text: '#ECEDEE',
-    background: '#151718',
+    text: RousdPalette.paper,
+    background: RousdPalette.greenNight,
     tint: tintColorDark,
-    icon: '#9BA1A6',
-    tabIconDefault: '#9BA1A6',
+    icon: RousdPalette.sage,
+    tabIconDefault: RousdPalette.sage,
     tabIconSelected: tintColorDark,
   },
 };

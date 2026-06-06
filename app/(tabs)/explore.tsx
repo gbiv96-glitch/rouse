@@ -6,18 +6,19 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import { RousdPalette } from "@/constants/theme";
 import type { BookMetadataFields } from "@/types/book";
 import { formatDuration } from "@/utils/formatDuration";
 
 const SESSIONS_KEY = "readingSessions";
 
 const colors = {
-  background: "#F7F3EA",
-  text: "#1F2933",
-  mutedText: "#6B7280",
-  accent: "#2F5D50",
-  accentDark: "#24483E",
-  softCream: "#FFF8ED",
+  background: RousdPalette.parchment,
+  text: RousdPalette.text,
+  title: RousdPalette.title,
+  mutedText: RousdPalette.muted,
+  accent: RousdPalette.green,
+  accentDark: RousdPalette.greenDark,
 };
 
 type ReadingSession = {
@@ -95,10 +96,10 @@ export default function DiaryScreen() {
   if (sessions.length === 0) {
     return (
       <ThemedView style={styles.screen}>
-        <View style={styles.emptyContent}>
+        <View style={[styles.emptyContent, { paddingTop: insets.top }]}>
           <ThemedText style={styles.title}>Your reading life</ThemedText>
           <ThemedText style={styles.emptyText}>
-            Your first session will appear here.
+            Your reading will gather here.
           </ThemedText>
         </View>
       </ThemedView>
@@ -173,7 +174,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   title: {
-    color: "#1B2A22",
+    color: colors.title,
     fontSize: 42,
     lineHeight: 49,
     fontWeight: "400",
@@ -237,7 +238,7 @@ const styles = StyleSheet.create({
     color: colors.accentDark,
     fontSize: 17,
     lineHeight: 24,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   entryBook: {
     color: "rgba(31,41,51,0.50)",

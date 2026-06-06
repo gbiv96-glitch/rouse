@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Animated,
   AppState,
@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import { RousdPalette, RousdRadii } from "@/constants/theme";
 import {
   getLastGoogleBooksLookupStatus,
   searchGoogleBooks,
@@ -43,15 +44,23 @@ const ACTIVE_SESSION_TODAY_START_SECONDS_KEY =
 const ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY =
   "activeReadingSessionLifetimeStartSeconds";
 const colors = {
-  background: "#F7F3EA",
-  card: "#FFFFFF",
-  text: "#1F2933",
-  mutedText: "#6B7280",
-  accent: "#2F5D50",
-  accentDark: "#24483E",
-  danger: "#B4533A",
-  success: "#2F5D50",
-  softAccent: "#DDEBE4",
+  background: RousdPalette.parchment,
+  card: RousdPalette.card,
+  paper: RousdPalette.paper,
+  text: RousdPalette.text,
+  title: RousdPalette.title,
+  mutedText: RousdPalette.muted,
+  warmMuted: RousdPalette.warmMuted,
+  accent: RousdPalette.green,
+  accentDark: RousdPalette.greenDark,
+  danger: RousdPalette.danger,
+  success: RousdPalette.green,
+  softAccent: RousdPalette.sage,
+  brass: RousdPalette.brass,
+  deepGreen: RousdPalette.greenDeep,
+  completedBackground: RousdPalette.greenNight,
+  completedCover: RousdPalette.greenCover,
+  completedText: RousdPalette.parchment,
   sessionBackground: "#123F34",
   sessionBackgroundLight: "#1E5C4C",
 };
@@ -244,14 +253,14 @@ function formatSessionTimestamp(createdAt?: string, fallbackDate?: string) {
   });
 
   if (sessionDate.toDateString() === today.toDateString()) {
-    return `Today • ${time}`;
+    return `Today - ${time}`;
   }
 
   if (sessionDate.toDateString() === yesterday.toDateString()) {
-    return `Yesterday • ${time}`;
+    return `Yesterday - ${time}`;
   }
 
-  return `${sessionDate.toLocaleDateString()} • ${time}`;
+  return `${sessionDate.toLocaleDateString()} - ${time}`;
 }
 
 function getSessionDateValue(session: ReadingSession) {
@@ -418,6 +427,7 @@ export default function HomeScreen() {
   const [sessionReflection, setSessionReflection] = useState("");
   const [ritualLineText, setRitualLineText] = useState(readingRitualLines[0]);
   const [manualLogNote, setManualLogNote] = useState("");
+  const [isHomeMenuOpen, setIsHomeMenuOpen] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ritualOpacity = useRef(new Animated.Value(0)).current;
@@ -439,6 +449,8 @@ export default function HomeScreen() {
   const lastBookLookupQuery = useRef<string | null>(null);
   const bookLookupAutoScrollKey = useRef<string | null>(null);
   const bookInputWasManuallyScrolled = useRef(false);
+  const bookTitleWasEditedThisVisit = useRef(false);
+  const bookTitleDidSelectPrefill = useRef(false);
   const revealReflectionScrollRef = useRef<ScrollView | null>(null);
   const revealReflectionInputY = useRef<number | null>(null);
   const revealReflectionDidAutoScroll = useRef(false);
@@ -451,16 +463,26 @@ export default function HomeScreen() {
   const completedBookSparkValues = useRef(
     completedBookSparkPositions.map(() => new Animated.Value(0)),
   ).current;
+  const [bookTitleSelection, setBookTitleSelection] = useState<
+    { start: number; end: number } | undefined
+  >(undefined);
+
+  const resetInvalidTransientScreen = useCallback((warning: string) => {
+    console.warn(warning);
+    setCompletedBookReview("");
+    setSessionReflection("");
+    setCompletedBookMoment(null);
+    setSanctuaryReveal(null);
+    setShowBookCompletedInput(false);
+    setPendingSessionSeconds(0);
+    setScreen("home");
+  }, []);
 
   useEffect(() => {
     if (screen === "completedBook" && !completedBookMoment) {
-      console.warn(
+      resetInvalidTransientScreen(
         "Rousd completed-book screen opened without completedBookMoment; returning home.",
       );
-      setCompletedBookReview("");
-      setCompletedBookMoment(null);
-      setSanctuaryReveal(null);
-      setScreen("home");
       return;
     }
 
@@ -468,15 +490,11 @@ export default function HomeScreen() {
       screen === "reveal" &&
       (!sanctuaryReveal || !sanctuaryStages[sanctuaryReveal.stage])
     ) {
-      console.warn(
+      resetInvalidTransientScreen(
         "Rousd reveal screen opened without a valid sanctuaryReveal; returning home.",
       );
-      setSessionReflection("");
-      setSanctuaryReveal(null);
-      setCompletedBookMoment(null);
-      setScreen("home");
     }
-  }, [completedBookMoment, sanctuaryReveal, screen]);
+  }, [completedBookMoment, resetInvalidTransientScreen, sanctuaryReveal, screen]);
 
   useEffect(() => {
     const keyboardShowEvent =
@@ -504,10 +522,17 @@ export default function HomeScreen() {
   }, [bookTitle, showBookCompletedInput]);
 
   useEffect(() => {
+    if (screen !== "home") {
+      setIsHomeMenuOpen(false);
+    }
+
     if (screen !== "bookInput") {
       setIsBookInputFocused(false);
+      setBookTitleSelection(undefined);
       bookLookupAutoScrollKey.current = null;
       bookInputWasManuallyScrolled.current = false;
+      bookTitleWasEditedThisVisit.current = false;
+      bookTitleDidSelectPrefill.current = false;
     }
 
     if (screen !== "reveal") {
@@ -1163,6 +1188,9 @@ export default function HomeScreen() {
   };
 
   const handleBookTitleChange = (nextTitle: string) => {
+    bookTitleWasEditedThisVisit.current = true;
+    setBookTitleSelection(undefined);
+
     if (nextTitle.trim().toLowerCase() !== bookTitle.trim().toLowerCase()) {
       bookInputWasManuallyScrolled.current = false;
       bookLookupAutoScrollKey.current = null;
@@ -1176,6 +1204,8 @@ export default function HomeScreen() {
   };
 
   const selectGoogleBook = (book: BookMetadata) => {
+    bookTitleWasEditedThisVisit.current = true;
+    setBookTitleSelection(undefined);
     setSelectedBookMetadata(book);
     setBookTitle(book.title);
   };
@@ -1320,7 +1350,7 @@ export default function HomeScreen() {
     }
 
     if (validBookTitle) {
-      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} • ${validBookTitle}`);
+      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} - ${validBookTitle}`);
     } else {
       setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
     }
@@ -1529,7 +1559,7 @@ export default function HomeScreen() {
       ],
     ]);
 
-    setSessionMessage(`+${sessionDuration} • logged`);
+    setSessionMessage(`+${sessionDuration} - logged`);
 
     setTimeout(() => {
       setSessionMessage(null);
@@ -1590,7 +1620,7 @@ export default function HomeScreen() {
     ? latestSessionMatchesCurrentBook
       ? `Last read ${formatSessionTimestamp(latestSession.createdAt)}`
       : "Saved as your current book"
-    : "Save a session to place a book here";
+    : "Your saved book will live here.";
   const startHeroTitle = "Start a quiet session";
   const readingPlaceContinuityCopy = hasPlacedBook
     ? "Your book is waiting."
@@ -1842,7 +1872,7 @@ export default function HomeScreen() {
         bookLookupQueryIsReady &&
         (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
       const bookInputBottomPadding =
-        insets.bottom + (isKeyboardVisible ? 180 : 80);
+        insets.bottom + (isKeyboardVisible ? 104 : 80);
       const selectedBookAttributionMetadata =
         validBookTitle && selectedBookMetadata?.title === validBookTitle
           ? selectedBookMetadata
@@ -1868,7 +1898,7 @@ export default function HomeScreen() {
         <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
 
         <KeyboardAvoidingView
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
           keyboardVerticalOffset={Platform.OS === "ios" ? insets.top : 0}
           style={styles.bookReturnKeyboardView}
         >
@@ -1895,7 +1925,7 @@ export default function HomeScreen() {
             What did you read?
           </ThemedText>
           <ThemedText style={styles.bookReturnMinutes}>
-            Your time was kept • {pendingDuration}
+            Your time was kept - {pendingDuration}
           </ThemedText>
 
           <View style={styles.bookAttributionCard}>
@@ -1918,16 +1948,45 @@ export default function HomeScreen() {
                 placeholderTextColor="rgba(31,41,51,0.38)"
                 value={bookTitle}
                 onChangeText={handleBookTitleChange}
+                selection={bookTitleSelection}
                 style={styles.bookAttributionInput}
                 returnKeyType="done"
                 onSubmitEditing={saveBookForSession}
                 onFocus={() => {
                   setIsBookInputFocused(true);
+                  const shouldSelectPrefilledTitle =
+                    !bookTitleWasEditedThisVisit.current &&
+                    !bookTitleDidSelectPrefill.current &&
+                    bookTitle.trim().length > 0 &&
+                    currentBookTitle.trim().length > 0 &&
+                    bookTitle.trim() === currentBookTitle.trim();
+
+                  if (shouldSelectPrefilledTitle) {
+                    bookTitleDidSelectPrefill.current = true;
+                    setBookTitleSelection({
+                      start: 0,
+                      end: bookTitle.length,
+                    });
+                    setTimeout(() => {
+                      setBookTitleSelection(undefined);
+                    }, 80);
+                  } else {
+                    setBookTitleSelection(undefined);
+                  }
+
                   bookInputWasManuallyScrolled.current = false;
                   bookLookupAutoScrollKey.current = null;
                 }}
-                onBlur={() => setIsBookInputFocused(false)}
+                onBlur={() => {
+                  setIsBookInputFocused(false);
+                  setBookTitleSelection(undefined);
+                }}
               />
+              {bookTitle.trim().length > 0 ? (
+                <ThemedText style={styles.bookAttributionHelper}>
+                  Keep this title, or tap to change it.
+                </ThemedText>
+              ) : null}
             </View>
           </View>
 
@@ -2033,7 +2092,7 @@ export default function HomeScreen() {
                       {session.title}
                     </ThemedText>
                     <ThemedText style={styles.recentBookChoiceMeta}>
-                      Last saved • {formatDuration(Number(session.minutes))}
+                      Last saved - {formatDuration(Number(session.minutes))}
                     </ThemedText>
                   </View>
                 </Pressable>
@@ -2062,7 +2121,7 @@ export default function HomeScreen() {
                   Finished this book?
                 </ThemedText>
                 <ThemedText style={styles.bookCompletedSubtext}>
-                  Mark it complete — a quiet moment awaits.
+                  Mark it complete - a quiet moment awaits.
                 </ThemedText>
               </View>
               <View
@@ -2215,7 +2274,7 @@ export default function HomeScreen() {
           )}
 
           <ThemedText style={styles.closeHelperText}>
-            Capture reading time away from the timer.
+            For reading you did away from the timer.
           </ThemedText>
 
           <View style={styles.closeButtonRow}>
@@ -2253,7 +2312,7 @@ export default function HomeScreen() {
       if (!completedBookMoment) {
         return (
           <ThemedView style={styles.loadingContainer}>
-            <ThemedText style={styles.loadingText}>Returning home...</ThemedText>
+            <ThemedText style={styles.loadingWordmark}>Rousd</ThemedText>
           </ThemedView>
         );
       }
@@ -2406,7 +2465,7 @@ export default function HomeScreen() {
               {reflectionPrompt}
             </ThemedText>
             <TextInput
-              placeholder="A thought, a line, a feeling…"
+              placeholder="A thought, a line, a feeling..."
               placeholderTextColor="rgba(240,235,224,0.3)"
               value={completedBookReview}
               onChangeText={setCompletedBookReview}
@@ -2478,7 +2537,7 @@ export default function HomeScreen() {
       if (!sanctuaryReveal || !sanctuaryStages[sanctuaryReveal.stage]) {
         return (
           <ThemedView style={styles.loadingContainer}>
-            <ThemedText style={styles.loadingText}>Returning home...</ThemedText>
+            <ThemedText style={styles.loadingWordmark}>Rousd</ThemedText>
           </ThemedView>
         );
       }
@@ -2581,7 +2640,7 @@ export default function HomeScreen() {
                   {"A note, if you'd like one."}
                 </ThemedText>
                 <TextInput
-                  placeholder="A thought, a line, a feeling…"
+                  placeholder="A thought, a line, a feeling..."
                   placeholderTextColor="rgba(47,93,80,0.42)"
                   value={sessionReflection}
                   onChangeText={setSessionReflection}
@@ -2668,7 +2727,10 @@ export default function HomeScreen() {
         <ThemedView style={styles.diaryScreen}>
           <ScrollView
             style={styles.diaryScrollView}
-            contentContainerStyle={styles.diaryContent}
+            contentContainerStyle={[
+              styles.diaryContent,
+              { paddingTop: insets.top + 48 },
+            ]}
           >
             <Pressable
               style={({ pressed }) => [
@@ -2702,7 +2764,7 @@ export default function HomeScreen() {
             {diarySessions.length === 0 ? (
               <View style={styles.diaryEmptyCard}>
                 <ThemedText style={styles.diaryEmptyText}>
-                  Your first session will appear here.
+                  Your reading will gather here.
                 </ThemedText>
               </View>
             ) : (
@@ -2733,7 +2795,7 @@ export default function HomeScreen() {
                               {session.title}
                             </ThemedText>
                             <ThemedText style={styles.diaryMeta}>
-                              {session.source === "logged" ? "Logged" : "Timed"} •{" "}
+                              {session.source === "logged" ? "Logged" : "Timed"} -{" "}
                               {formatSessionTimestamp(
                                 session.createdAt,
                                 legacyDate,
@@ -2796,7 +2858,7 @@ export default function HomeScreen() {
             {completedBooks.length === 0 ? (
               <View style={styles.diaryEmptyCard}>
                 <ThemedText style={styles.diaryEmptyText}>
-                  Finished books will gather here.
+                  Books you finish will gather here.
                 </ThemedText>
               </View>
             ) : (
@@ -2851,7 +2913,7 @@ export default function HomeScreen() {
                           </ThemedText>
                         </View>
                         <ThemedText style={styles.finishedBookMeta}>
-                          {formatDuration(Number(book.totalBookMinutes ?? book.sessionMinutes))} ·{" "}
+                          {formatDuration(Number(book.totalBookMinutes ?? book.sessionMinutes))} Â·{" "}
                           {book.sessionCount ?? 1}{" "}
                           {(book.sessionCount ?? 1) === 1 ? "session" : "sessions"}
                         </ThemedText>
@@ -2904,7 +2966,7 @@ export default function HomeScreen() {
       style={styles.screen}
       contentContainerStyle={[
         styles.scrollContent,
-        { paddingBottom: 132 + insets.bottom },
+        { paddingBottom: 78 + insets.bottom },
       ]}
     >
       <ThemedView
@@ -2929,11 +2991,85 @@ export default function HomeScreen() {
         </View>
 
         <ThemedView style={styles.headerRow}>
-          <View>
+          <View style={styles.headerCopy}>
             <ThemedText style={styles.appName}>Rousd</ThemedText>
             <ThemedText style={styles.headerSubtitle}>
               Keep a light on for your reading life.
             </ThemedText>
+          </View>
+          <View style={styles.homeMenuWrap}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.homeMenuButton,
+                isHomeMenuOpen && styles.homeMenuButtonOpen,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => setIsHomeMenuOpen((value) => !value)}
+            >
+              <View style={styles.homeMenuMark}>
+                <View style={styles.homeMenuMarkDot} />
+                <View style={styles.homeMenuMarkDot} />
+                <View style={styles.homeMenuMarkDot} />
+              </View>
+              <ThemedText style={styles.homeMenuButtonText}>Menu</ThemedText>
+            </Pressable>
+
+            {isHomeMenuOpen ? (
+              <View style={styles.homeMenuPopover}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.homeMenuItem,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={() => {
+                    setIsHomeMenuOpen(false);
+                    setScreen("diary");
+                  }}
+                >
+                  <ThemedText style={styles.homeMenuItemText}>Diary</ThemedText>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.homeMenuItem,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={() => {
+                    setIsHomeMenuOpen(false);
+                    setScreen("finishedBooks");
+                  }}
+                >
+                  <ThemedText style={styles.homeMenuItemText}>
+                    Finished Books
+                  </ThemedText>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.homeMenuItem,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={async () => {
+                    setIsHomeMenuOpen(false);
+                    await openManualLog();
+                  }}
+                >
+                  <ThemedText style={styles.homeMenuItemText}>Manual Log</ThemedText>
+                </Pressable>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.homeMenuItem,
+                    styles.homeMenuCloseItem,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={() => setIsHomeMenuOpen(false)}
+                >
+                  <ThemedText
+                    style={[styles.homeMenuItemText, styles.homeMenuCloseText]}
+                  >
+                    Close
+                  </ThemedText>
+                </Pressable>
+              </View>
+            ) : null}
           </View>
         </ThemedView>
 
@@ -2947,7 +3083,7 @@ export default function HomeScreen() {
 
           <View style={styles.bookShrineTopRow}>
             <View style={styles.bookShrineIconPill}>
-              <ThemedText style={styles.bookShrineIcon}>✦</ThemedText>
+              <View style={styles.bookShrineIconDot} />
             </View>
             <ThemedText style={styles.bookShrineStage}>
               Reading place
@@ -3029,7 +3165,7 @@ export default function HomeScreen() {
               </ThemedText>
             </View>
             <View style={styles.startHeroArrowCircle}>
-              <ThemedText style={styles.startHeroArrow}>✦</ThemedText>
+              <View style={styles.startHeroArrowDot} />
             </View>
           </View>
         </Pressable>
@@ -3050,7 +3186,7 @@ export default function HomeScreen() {
             <ThemedText style={styles.manualLogButtonText}>
               Add a reading moment
             </ThemedText>
-            <ThemedText style={styles.manualLogChevron}>✦</ThemedText>
+            <View style={styles.manualLogDot} />
           </View>
         </Pressable>
 
@@ -3069,7 +3205,7 @@ export default function HomeScreen() {
         <ThemedView style={styles.sessionsCard}>
           {recentSessions.length === 0 ? (
             <ThemedText style={styles.emptySessionsText}>
-              {"Your first session will appear here. Start reading when you're ready."}
+              {"Your reading will appear here when you begin."}
             </ThemedText>
           ) : (
             visibleSessions.map((session, index) => {
@@ -3092,7 +3228,7 @@ export default function HomeScreen() {
                       {session.title}
                     </ThemedText>
                     <ThemedText style={styles.sessionDate}>
-                      {session.source === "logged" ? "Manually Logged" : "Timed"} • {formatSessionTimestamp(session.createdAt)}
+                      {session.source === "logged" ? "Manually Logged" : "Timed"} - {formatSessionTimestamp(session.createdAt)}
                     </ThemedText>
                     {sessionReflection ? (
                       <ThemedText style={styles.sessionNote} numberOfLines={2}>
@@ -3118,7 +3254,7 @@ export default function HomeScreen() {
           onPress={() => setScreen("diary")}
         >
           <ThemedText style={styles.diaryOpenButtonText}>
-            Open diary
+            View your diary
           </ThemedText>
           <ThemedText style={styles.diaryOpenButtonSubtext}>
             Read the full private record.
@@ -3157,7 +3293,7 @@ export default function HomeScreen() {
               Finished books
             </ThemedText>
             <ThemedText style={styles.finishedBooksHomeSubtext}>
-              Revisit the books you have closed.
+              Return to books you have finished.
             </ThemedText>
           </View>
         </Pressable>
@@ -3477,7 +3613,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   welcomeTitle: {
-    color: "#173826",
+    color: colors.completedCover,
     fontSize: 36,
     lineHeight: 42,
     fontWeight: "400",
@@ -3497,7 +3633,7 @@ const styles = StyleSheet.create({
   },
   welcomeStepsCard: {
     backgroundColor: "rgba(247,243,234,0.78)",
-    borderRadius: 24,
+    borderRadius: RousdRadii.card,
     paddingVertical: 14,
     paddingHorizontal: 16,
     gap: 10,
@@ -3518,7 +3654,7 @@ const styles = StyleSheet.create({
     borderRadius: 13,
     overflow: "hidden",
     textAlign: "center",
-    color: "#FFF8ED",
+    color: colors.paper,
     backgroundColor: colors.accent,
     fontSize: 13,
     lineHeight: 26,
@@ -3543,21 +3679,30 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   welcomeButtonText: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontSize: 16,
     lineHeight: 22,
     fontWeight: "900",
   },
   headerRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 16,
     backgroundColor: "transparent",
     marginBottom: 4,
-    zIndex: 2,
+    zIndex: 5,
+  },
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
   },
   appName: {
     fontSize: 48,
     lineHeight: 54,
     fontWeight: "400",
-    color: "#1B2A22",
+    color: colors.title,
     letterSpacing: -1.9,
     fontFamily: Platform.select({
       ios: "Georgia",
@@ -3571,7 +3716,76 @@ const styles = StyleSheet.create({
     color: colors.mutedText,
     fontWeight: "600",
     marginTop: 6,
-  },  sanctuaryHeroScene: {
+  },  homeMenuWrap: {
+    position: "relative",
+    alignItems: "flex-end",
+    backgroundColor: "transparent",
+    paddingTop: 6,
+  },
+  homeMenuButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    minHeight: 36,
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: "rgba(255,248,237,0.54)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+  },
+  homeMenuButtonOpen: {
+    backgroundColor: "rgba(255,248,237,0.82)",
+  },
+  homeMenuMark: {
+    gap: 3,
+    backgroundColor: "transparent",
+  },
+  homeMenuMarkDot: {
+    width: 3,
+    height: 3,
+    borderRadius: 2,
+    backgroundColor: "rgba(47,93,80,0.58)",
+  },
+  homeMenuButtonText: {
+    color: "rgba(47,93,80,0.72)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+  homeMenuPopover: {
+    position: "absolute",
+    top: 46,
+    right: 0,
+    width: 178,
+    borderRadius: 18,
+    paddingVertical: 8,
+    backgroundColor: "rgba(255,248,237,0.96)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.10)",
+    ...softCardShadow,
+  },
+  homeMenuItem: {
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    backgroundColor: "transparent",
+  },
+  homeMenuCloseItem: {
+    borderTopWidth: 1,
+    borderTopColor: "rgba(47,93,80,0.08)",
+    marginTop: 4,
+  },
+  homeMenuItemText: {
+    color: colors.accentDark,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "800",
+  },
+  homeMenuCloseText: {
+    color: "rgba(47,93,80,0.56)",
+  },
+  sanctuaryHeroScene: {
     height: 186,
     backgroundColor: "#1B4234",
     overflow: "hidden",
@@ -3705,7 +3919,7 @@ const styles = StyleSheet.create({
     width: 25,
     height: 19,
     borderRadius: 10,
-    backgroundColor: "#FFF8ED",
+    backgroundColor: colors.paper,
   },  sanctuaryHeroVine: {
     position: "absolute",
     top: 30,
@@ -3752,7 +3966,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "rgba(255,248,237,0.10)",
   },  sanctuaryHeroTitle: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontSize: 30,
     lineHeight: 35,
     fontWeight: "400",
@@ -3783,12 +3997,12 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,248,237,0.12)",
   },
   sanctuaryHeroIcon: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontSize: 19,
     lineHeight: 24,
     fontWeight: "800",
   },  sanctuaryHeroStatNumber: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontSize: 19,
     lineHeight: 24,
     fontWeight: "700",
@@ -3950,7 +4164,7 @@ const styles = StyleSheet.create({
     width: 24,
     height: 18,
     borderRadius: 9,
-    backgroundColor: "#FFF8ED",
+    backgroundColor: colors.paper,
   },  sanctuaryShelfBookOne: {
     width: 10,
     height: 24,
@@ -4008,7 +4222,7 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   startHeroTitle: {
-    color: "#FFFFFF",
+    color: colors.card,
     fontSize: 21,
     lineHeight: 28,
     fontWeight: "700",
@@ -4023,6 +4237,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "rgba(255,255,255,0.13)",
   },
+  startHeroArrowDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "rgba(255,255,255,0.9)",
+  },
   startHeroArrow: {
     color: "rgba(255,255,255,0.9)",
     fontSize: 22,
@@ -4032,7 +4252,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.46)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.07)",
-    borderRadius: 24,
+    borderRadius: RousdRadii.card,
     minHeight: 56,
     paddingVertical: 13,
     paddingHorizontal: 18,
@@ -4051,6 +4271,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     fontWeight: "700",
+  },
+  manualLogDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "rgba(36,72,62,0.36)",
   },
   manualLogChevron: {
     color: "rgba(36,72,62,0.44)",
@@ -4144,7 +4370,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontWeight: "800",
   },  saveBookButtonText: {
-    color: "#FFFFFF",
+    color: colors.card,
     fontSize: 16,
     lineHeight: 22,
     fontWeight: "800",
@@ -4170,7 +4396,7 @@ const styles = StyleSheet.create({
   },
   sessionsCard: {
     backgroundColor: "rgba(255,255,255,0.68)",
-    borderRadius: 22,
+    borderRadius: RousdRadii.card,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
@@ -4245,7 +4471,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,248,237,0.70)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
-    borderRadius: 22,
+    borderRadius: RousdRadii.card,
     paddingVertical: 16,
     paddingHorizontal: 18,
     ...softCardShadow,
@@ -4254,7 +4480,7 @@ const styles = StyleSheet.create({
     color: colors.accentDark,
     fontSize: 16,
     lineHeight: 22,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   diaryOpenButtonSubtext: {
     color: "rgba(31,41,51,0.54)",
@@ -4293,7 +4519,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
   },
   diaryTitle: {
-    color: "#1B2A22",
+    color: colors.title,
     fontSize: 42,
     lineHeight: 48,
     fontWeight: "400",
@@ -4314,7 +4540,7 @@ const styles = StyleSheet.create({
   },
   diaryEmptyCard: {
     backgroundColor: "rgba(255,248,237,0.72)",
-    borderRadius: 24,
+    borderRadius: RousdRadii.card,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
     padding: 20,
@@ -4347,7 +4573,7 @@ const styles = StyleSheet.create({
   },
   diaryEntryCard: {
     backgroundColor: "rgba(255,248,237,0.82)",
-    borderRadius: 24,
+    borderRadius: RousdRadii.card,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
     padding: 18,
@@ -4368,7 +4594,7 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 18,
     lineHeight: 25,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   diaryMeta: {
     color: "rgba(31,41,51,0.50)",
@@ -4381,7 +4607,7 @@ const styles = StyleSheet.create({
     color: colors.accent,
     fontSize: 15,
     lineHeight: 21,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   diaryReflection: {
     color: "rgba(31,41,51,0.68)",
@@ -4414,7 +4640,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,248,237,0.70)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
-    borderRadius: 22,
+    borderRadius: RousdRadii.card,
     paddingVertical: 15,
     paddingHorizontal: 18,
     ...softCardShadow,
@@ -4445,7 +4671,7 @@ const styles = StyleSheet.create({
     color: colors.accentDark,
     fontSize: 16,
     lineHeight: 22,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   finishedBooksHomeSubtext: {
     color: "rgba(31,41,51,0.54)",
@@ -4468,17 +4694,17 @@ const styles = StyleSheet.create({
   },
   finishedBooksScreen: {
     flex: 1,
-    backgroundColor: "#F7F2E8",
+    backgroundColor: colors.background,
   },
   finishedBooksScrollView: {
     flex: 1,
-    backgroundColor: "#F7F2E8",
+    backgroundColor: colors.background,
   },
   finishedBooksContent: {
     paddingHorizontal: 24,
   },
   finishedBooksEyebrow: {
-    color: "#C4945A",
+    color: colors.brass,
     fontSize: 10,
     lineHeight: 14,
     fontWeight: "800",
@@ -4487,7 +4713,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   finishedBooksTitle: {
-    color: "#1A1A14",
+    color: colors.title,
     fontSize: 26,
     lineHeight: 32,
     fontWeight: "400",
@@ -4499,7 +4725,7 @@ const styles = StyleSheet.create({
     }),
   },
   finishedBooksSubtitle: {
-    color: "#8A8578",
+    color: colors.warmMuted,
     fontSize: 13,
     lineHeight: 19,
     fontStyle: "italic",
@@ -4525,7 +4751,7 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   finishedBookCoverAlt: {
-    backgroundColor: "#1E3A2C",
+    backgroundColor: colors.deepGreen,
   },
   finishedBookCoverWithImage: {
     padding: 0,
@@ -4538,7 +4764,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.sessionBackground,
   },
   finishedBookCoverTitle: {
-    color: "#F0EBE0",
+    color: colors.completedText,
     width: "100%",
     fontSize: 8,
     lineHeight: 10,
@@ -4558,19 +4784,19 @@ const styles = StyleSheet.create({
   },
   finishedBookTitle: {
     flex: 1,
-    color: "#1A1A14",
+    color: colors.title,
     fontSize: 15,
     lineHeight: 20,
     fontWeight: "500",
   },
   finishedBookMeta: {
-    color: "#8A8578",
+    color: colors.warmMuted,
     fontSize: 11,
     lineHeight: 16,
     marginTop: 4,
   },
   finishedBookDate: {
-    color: "#C4945A",
+    color: colors.brass,
     fontSize: 11,
     lineHeight: 16,
     textAlign: "right",
@@ -4597,7 +4823,7 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
   finishedBooksNextEyebrow: {
-    color: "#C4945A",
+    color: colors.brass,
     fontSize: 9,
     lineHeight: 13,
     fontWeight: "800",
@@ -4612,7 +4838,7 @@ const styles = StyleSheet.create({
   },
   finishedBooksReturnButton: {
     height: 52,
-    backgroundColor: "#1E3A2C",
+    backgroundColor: colors.deepGreen,
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
@@ -4655,7 +4881,7 @@ const styles = StyleSheet.create({
     marginTop: 34,
   },
   quietSessionTitle: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontSize: 36,
     lineHeight: 44,
     fontWeight: "400",
@@ -4741,7 +4967,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   sessionTitle: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontSize: 25,
     lineHeight: 33,
     fontWeight: "800",
@@ -4815,7 +5041,7 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   closeTransitionTitle: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontFamily: Platform.select({ ios: "Georgia", android: "serif", default: "serif" }),
     fontSize: 36,
     lineHeight: 43,
@@ -4864,12 +5090,17 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   closeTitle: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontSize: 32,
     lineHeight: 39,
-    fontWeight: "800",
+    fontWeight: "400",
     letterSpacing: -0.8,
     maxWidth: 330,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
   },
   closeMinutes: {
     color: "rgba(255,248,237,0.62)",
@@ -4888,7 +5119,7 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     fontSize: 18,
     lineHeight: 24,
-    color: "#FFF8ED",
+    color: colors.paper,
     fontWeight: "600",
   },
   manualBookInput: {
@@ -5006,13 +5237,18 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   revealTitle: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontSize: 34,
     lineHeight: 41,
-    fontWeight: "900",
+    fontWeight: "400",
     letterSpacing: -0.8,
     textAlign: "center",
     marginBottom: 22,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
   },
   revealSceneCard: {
     height: 260,
@@ -5237,7 +5473,7 @@ const styles = StyleSheet.create({
     width: 48,
     height: 7,
     borderRadius: 3,
-    backgroundColor: "#FFF8ED",
+    backgroundColor: colors.paper,
   },
   revealMug: {
     position: "absolute",
@@ -5246,7 +5482,7 @@ const styles = StyleSheet.create({
     width: 24,
     height: 18,
     borderRadius: 9,
-    backgroundColor: "#FFF8ED",
+    backgroundColor: colors.paper,
   },
   revealShelf: {
     position: "absolute",
@@ -5272,7 +5508,7 @@ const styles = StyleSheet.create({
     width: 10,
     height: 17,
     borderRadius: 2,
-    backgroundColor: "#FFF8ED",
+    backgroundColor: colors.paper,
   },
   revealShelfBookThree: {
     width: 10,
@@ -5349,7 +5585,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   revealContinueButton: {
-    backgroundColor: "#FFF8ED",
+    backgroundColor: colors.paper,
     borderRadius: 999,
     paddingVertical: 16,
     alignItems: "center",
@@ -5434,6 +5670,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
   },
+  bookShrineIconDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: colors.accent,
+  },
   bookShrineIcon: {
     color: colors.accent,
     fontSize: 13,
@@ -5449,7 +5691,7 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   bookShrineGreeting: {
-    color: "#1B2A22",
+    color: colors.title,
     fontSize: 30,
     lineHeight: 36,
     textAlign: "center",
@@ -5480,7 +5722,7 @@ const styles = StyleSheet.create({
     width: 122,
     height: 164,
     borderRadius: 12,
-    backgroundColor: "#1E3E32",
+    backgroundColor: colors.deepGreen,
     borderWidth: 1,
     borderColor: "rgba(255,248,237,0.36)",
     alignItems: "center",
@@ -5503,10 +5745,10 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
     borderRadius: 11,
-    backgroundColor: "#1E3E32",
+    backgroundColor: colors.deepGreen,
   },
   bookShrineCoverTitle: {
-    color: "#F7F3EA",
+    color: colors.background,
     width: "100%",
     fontSize: 16,
     lineHeight: 22,
@@ -5693,7 +5935,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   bookReturnTitle: {
-    color: "#1B2A22",
+    color: colors.title,
     fontSize: 34,
     lineHeight: 41,
     fontWeight: "400",
@@ -5731,17 +5973,17 @@ const styles = StyleSheet.create({
     borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#1E3E32",
+    backgroundColor: colors.deepGreen,
     overflow: "hidden",
   },
   bookAttributionCoverImage: {
     width: "100%",
     height: "100%",
     borderRadius: 9,
-    backgroundColor: "#1E3E32",
+    backgroundColor: colors.deepGreen,
   },
   bookAttributionCoverText: {
-    color: "#F7F3EA",
+    color: colors.background,
     fontSize: 24,
     lineHeight: 30,
     fontWeight: "400",
@@ -5771,10 +6013,17 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     padding: 0,
   },
+  bookAttributionHelper: {
+    color: "rgba(31,41,51,0.46)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "600",
+    marginTop: 6,
+  },
   bookLookupPanel: {
     marginTop: 14,
     backgroundColor: "rgba(255,255,255,0.48)",
-    borderRadius: 22,
+    borderRadius: RousdRadii.card,
     padding: 12,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.06)",
@@ -5870,7 +6119,7 @@ const styles = StyleSheet.create({
   recentBookPicker: {
     marginTop: 18,
     backgroundColor: "rgba(255,255,255,0.54)",
-    borderRadius: 24,
+    borderRadius: RousdRadii.card,
     padding: 14,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.07)",
@@ -5924,7 +6173,7 @@ const styles = StyleSheet.create({
   bookCompletedCard: {
     marginTop: 18,
     backgroundColor: "rgba(255,255,255,0.54)",
-    borderRadius: 24,
+    borderRadius: RousdRadii.card,
     padding: 14,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.07)",
@@ -5971,13 +6220,13 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   bookCompletedSwitchTrackSelected: {
-    backgroundColor: "#C4945A",
+    backgroundColor: colors.brass,
   },
   bookCompletedSwitchKnob: {
     width: 14,
     height: 14,
     borderRadius: 7,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: colors.card,
   },
   bookCompletedSwitchKnobSelected: {
     transform: [{ translateX: 14 }],
@@ -6014,7 +6263,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   bookReturnSaveButtonText: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontSize: 15,
     lineHeight: 21,
     fontWeight: "900",
@@ -6044,7 +6293,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   bookRevealTitle: {
-    color: "#1B2A22",
+    color: colors.title,
     fontSize: 34,
     lineHeight: 41,
     fontWeight: "400",
@@ -6073,7 +6322,7 @@ const styles = StyleSheet.create({
     width: 86,
     height: 118,
     borderRadius: 10,
-    backgroundColor: "#1E3E32",
+    backgroundColor: colors.deepGreen,
     alignItems: "center",
     justifyContent: "center",
     padding: 9,
@@ -6087,10 +6336,10 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
     borderRadius: 9,
-    backgroundColor: "#1E3E32",
+    backgroundColor: colors.deepGreen,
   },
   bookRevealCoverTitle: {
-    color: "#F7F3EA",
+    color: colors.background,
     width: "100%",
     fontSize: 13,
     lineHeight: 17,
@@ -6132,7 +6381,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   bookRevealContinueButtonText: {
-    color: "#FFF8ED",
+    color: colors.paper,
     fontSize: 16,
     lineHeight: 22,
     fontWeight: "900",
@@ -6150,7 +6399,7 @@ const styles = StyleSheet.create({
   },
   completedBookScreen: {
     flex: 1,
-    backgroundColor: "#1C2E25",
+    backgroundColor: colors.completedBackground,
   },
   completedBookKeyboardView: {
     flex: 1,
@@ -6162,7 +6411,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 28,
   },
   completedBookEyebrow: {
-    color: "#C4945A",
+    color: colors.brass,
     fontSize: 10,
     lineHeight: 14,
     fontWeight: "800",
@@ -6190,13 +6439,13 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 2,
-    backgroundColor: "#C4945A",
+    backgroundColor: colors.brass,
   },
   completedBookCover: {
     width: 110,
     height: 154,
     borderRadius: 12,
-    backgroundColor: "#173826",
+    backgroundColor: colors.completedCover,
     alignItems: "center",
     justifyContent: "center",
     padding: 12,
@@ -6211,10 +6460,10 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
     borderRadius: 11,
-    backgroundColor: "#173826",
+    backgroundColor: colors.completedCover,
   },
   completedBookCoverTitle: {
-    color: "#F0EBE0",
+    color: colors.completedText,
     width: "100%",
     fontSize: 13,
     lineHeight: 17,
@@ -6227,7 +6476,7 @@ const styles = StyleSheet.create({
     }),
   },
   completedBookTitle: {
-    color: "#F0EBE0",
+    color: colors.completedText,
     fontSize: 22,
     lineHeight: 28,
     fontWeight: "400",
@@ -6253,7 +6502,7 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   completedBookStatValue: {
-    color: "#F0EBE0",
+    color: colors.completedText,
     fontSize: 20,
     lineHeight: 25,
     fontWeight: "400",
@@ -6279,7 +6528,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(240,235,224,0.1)",
   },
   completedBookHeadline: {
-    color: "#F0EBE0",
+    color: colors.completedText,
     fontSize: 17,
     lineHeight: 23,
     fontWeight: "400",
@@ -6325,7 +6574,7 @@ const styles = StyleSheet.create({
   completedBookReturnButton: {
     width: "100%",
     height: 48,
-    backgroundColor: "#C4945A",
+    backgroundColor: colors.brass,
     borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
@@ -6378,4 +6627,3 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
 });
-
