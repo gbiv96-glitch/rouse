@@ -1621,7 +1621,7 @@ export default function HomeScreen() {
       ? `Last read ${formatSessionTimestamp(latestSession.createdAt)}`
       : "Saved as your current book"
     : "Your saved book will live here.";
-  const startHeroTitle = "Start a quiet session";
+  const startHeroTitle = "Start reading";
   const readingPlaceContinuityCopy = hasPlacedBook
     ? "Your book is waiting."
     : "Your first book can live here.";
@@ -1776,8 +1776,8 @@ export default function HomeScreen() {
           ]}
         >
           <View style={styles.beaconMark}>
-            <View style={styles.beaconBeam} />
-            <View style={styles.sessionQuietDot} />
+            <View style={styles.beaconHalo} />
+            <View style={styles.beaconCore} />
           </View>
           <View style={styles.ritualLineArea}>
             <Animated.View
@@ -1824,7 +1824,8 @@ export default function HomeScreen() {
           ]}
         >
           <View style={styles.activeBeaconBadge}>
-            <View style={styles.activeBeaconDot} />
+            <View style={styles.activeBeaconHalo} />
+            <View style={styles.activeBeaconCore} />
           </View>
           <ThemedText style={styles.quietSessionEyebrow}>
             Reading session
@@ -1872,7 +1873,7 @@ export default function HomeScreen() {
         bookLookupQueryIsReady &&
         (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
       const bookInputBottomPadding =
-        insets.bottom + (isKeyboardVisible ? 104 : 80);
+        isKeyboardVisible ? insets.bottom + 104 : 28;
       const selectedBookAttributionMetadata =
         validBookTitle && selectedBookMetadata?.title === validBookTitle
           ? selectedBookMetadata
@@ -1990,6 +1991,53 @@ export default function HomeScreen() {
             </View>
           </View>
 
+          <View style={styles.bookCompletedCard}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.bookCompletedToggle,
+                showBookCompletedInput && styles.bookCompletedToggleSelected,
+                !canCompleteBook && { opacity: 0.4 },
+                pressed && styles.buttonPressed,
+              ]}
+              disabled={!canCompleteBook}
+              onPress={() => {
+                setShowBookCompletedInput((value) => !value);
+                if (showBookCompletedInput) {
+                  setCompletedBookReview("");
+                }
+              }}
+            >
+              <View style={styles.bookCompletedToggleCopy}>
+                <ThemedText style={styles.bookCompletedLabel}>
+                  Finished this book?
+                </ThemedText>
+                <ThemedText style={styles.bookCompletedSubtext}>
+                  Place it on your finished shelf.
+                </ThemedText>
+              </View>
+              <View
+                style={[
+                  styles.bookCompletedSwitchTrack,
+                  showBookCompletedInput &&
+                    styles.bookCompletedSwitchTrackSelected,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.bookCompletedSwitchKnob,
+                    showBookCompletedInput &&
+                      styles.bookCompletedSwitchKnobSelected,
+                  ]}
+                />
+              </View>
+            </Pressable>
+            {!canCompleteBook ? (
+              <ThemedText style={styles.bookCompletedDisabledHelper}>
+                Name the book first, then you can mark it finished.
+              </ThemedText>
+            ) : null}
+          </View>
+
           {shouldShowBookLookup ? (
             <View
               style={styles.bookLookupPanel}
@@ -2008,7 +2056,7 @@ export default function HomeScreen() {
                 ) : null}
               </View>
 
-              {bookLookupResults.map((book) => {
+              {bookLookupResults.slice(0, 3).map((book) => {
                 const isSelected =
                   selectedBookMetadata?.googleBooksId === book.googleBooksId;
 
@@ -2075,7 +2123,7 @@ export default function HomeScreen() {
           {visibleSessions.length > 0 && (
             <View style={styles.recentBookPicker}>
               <ThemedText style={styles.recentBookPickerTitle}>Recent books</ThemedText>
-              {visibleSessions.map((session) => (
+              {visibleSessions.slice(0, 2).map((session) => (
                 <Pressable
                   key={session.id}
                   style={({ pressed }) => [
@@ -2100,53 +2148,8 @@ export default function HomeScreen() {
             </View>
           )}
 
-          <View style={styles.bookCompletedCard}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.bookCompletedToggle,
-                showBookCompletedInput && styles.bookCompletedToggleSelected,
-                !canCompleteBook && { opacity: 0.4 },
-                pressed && styles.buttonPressed,
-              ]}
-              disabled={!canCompleteBook}
-              onPress={() => {
-                setShowBookCompletedInput((value) => !value);
-                if (showBookCompletedInput) {
-                  setCompletedBookReview("");
-                }
-              }}
-            >
-              <View style={styles.bookCompletedToggleCopy}>
-                <ThemedText style={styles.bookCompletedLabel}>
-                  Finished this book?
-                </ThemedText>
-                <ThemedText style={styles.bookCompletedSubtext}>
-                  Mark it complete - a quiet moment awaits.
-                </ThemedText>
-              </View>
-              <View
-                style={[
-                  styles.bookCompletedSwitchTrack,
-                  showBookCompletedInput &&
-                    styles.bookCompletedSwitchTrackSelected,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.bookCompletedSwitchKnob,
-                    showBookCompletedInput &&
-                      styles.bookCompletedSwitchKnobSelected,
-                  ]}
-                />
-              </View>
-            </Pressable>
-            {!canCompleteBook ? (
-              <ThemedText style={styles.bookCompletedDisabledHelper}>
-                Name the book first, then you can mark it finished.
-              </ThemedText>
-            ) : null}
-          </View>
-
+        </ScrollView>
+        <View style={styles.bookReturnStickyActions}>
           <View style={styles.closeButtonRow}>
             <Pressable
               style={({ pressed }) => [
@@ -2172,7 +2175,7 @@ export default function HomeScreen() {
               </ThemedText>
             </Pressable>
           </View>
-        </ScrollView>
+        </View>
         </KeyboardAvoidingView>
       </ThemedView>
     );
@@ -4954,15 +4957,24 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     paddingBottom: 10,
   },
-  sessionQuietDot: {
-    width: 10,
-    height: 10,
+  beaconHalo: {
+    position: "absolute",
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: "rgba(247,195,107,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,248,237,0.10)",
+  },
+  beaconCore: {
+    width: 9,
+    height: 9,
     borderRadius: 5,
-    backgroundColor: "rgba(247,195,107,0.72)",
+    backgroundColor: "rgba(247,195,107,0.76)",
     shadowColor: "#F7C36B",
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.34,
-    shadowRadius: 10,
+    shadowOpacity: 0.28,
+    shadowRadius: 9,
     elevation: 2,
   },
   sessionTitle: {
@@ -5853,13 +5865,6 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     marginBottom: 22,
   },
-  beaconBeam: {
-    position: "absolute",
-    width: 30,
-    height: 30,
-    borderRadius: 15,
-    backgroundColor: "rgba(247,195,107,0.13)",
-  },
   activeBeaconBadge: {
     width: 34,
     height: 34,
@@ -5868,14 +5873,23 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "rgba(247,195,107,0.10)",
   },
-  activeBeaconDot: {
+  activeBeaconHalo: {
+    position: "absolute",
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "rgba(247,195,107,0.10)",
+    borderWidth: 1,
+    borderColor: "rgba(255,248,237,0.08)",
+  },
+  activeBeaconCore: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: "rgba(247,195,107,0.72)",
+    backgroundColor: "rgba(247,195,107,0.74)",
     shadowColor: "#F7C36B",
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.28,
+    shadowOpacity: 0.24,
     shadowRadius: 8,
     elevation: 2,
   },
@@ -5892,6 +5906,13 @@ const styles = StyleSheet.create({
   },
   bookReturnScrollView: {
     flex: 1,
+  },
+  bookReturnStickyActions: {
+    backgroundColor: "rgba(247,243,234,0.92)",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(47,93,80,0.08)",
+    paddingTop: 14,
+    paddingBottom: 2,
   },
   bookReturnGlowTop: {
     position: "absolute",
