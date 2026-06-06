@@ -2149,7 +2149,7 @@ export default function HomeScreen() {
           )}
 
         </ScrollView>
-        <View style={styles.bookReturnStickyActions}>
+        <View style={[styles.bookReturnStickyActions, { paddingBottom: Math.max(insets.bottom, 12) }]}>
           <View style={styles.closeButtonRow}>
             <Pressable
               style={({ pressed }) => [
@@ -2552,7 +2552,7 @@ export default function HomeScreen() {
       const shouldShowRevealCoverImage =
         Boolean(revealCoverUrl) && !hasRevealCoverError;
       const bookRevealBottomPadding =
-        insets.bottom + (isKeyboardVisible ? 176 : 96);
+        isKeyboardVisible ? insets.bottom + 128 : 28;
 
       return (
       <ThemedView
@@ -2689,6 +2689,8 @@ export default function HomeScreen() {
               </ThemedText>
             </View>
 
+          </ScrollView>
+          <View style={styles.bookRevealStickyActions}>
             <Pressable
               style={({ pressed }) => [
                 styles.bookRevealContinueButton,
@@ -2718,7 +2720,7 @@ export default function HomeScreen() {
                 </ThemedText>
               </Pressable>
             )}
-          </ScrollView>
+          </View>
         </Animated.View>
         </KeyboardAvoidingView>
       </ThemedView>
@@ -3610,7 +3612,7 @@ const styles = StyleSheet.create({
     color: "rgba(47,93,80,0.72)",
     fontSize: 12,
     lineHeight: 17,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 1.4,
     textTransform: "uppercase",
     marginBottom: 10,
@@ -3661,7 +3663,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
     fontSize: 13,
     lineHeight: 26,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   welcomeStepText: {
     flex: 1,
@@ -3685,7 +3687,7 @@ const styles = StyleSheet.create({
     color: colors.paper,
     fontSize: 16,
     lineHeight: 22,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   headerRow: {
     flexDirection: "row",
@@ -3754,7 +3756,7 @@ const styles = StyleSheet.create({
     color: "rgba(47,93,80,0.72)",
     fontSize: 12,
     lineHeight: 17,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: 0.2,
   },
   homeMenuPopover: {
@@ -3783,7 +3785,7 @@ const styles = StyleSheet.create({
     color: colors.accentDark,
     fontSize: 14,
     lineHeight: 20,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   homeMenuCloseText: {
     color: "rgba(47,93,80,0.56)",
@@ -4003,7 +4005,7 @@ const styles = StyleSheet.create({
     color: colors.paper,
     fontSize: 19,
     lineHeight: 24,
-    fontWeight: "800",
+    fontWeight: "600",
   },  sanctuaryHeroStatNumber: {
     color: colors.paper,
     fontSize: 19,
@@ -4285,7 +4287,7 @@ const styles = StyleSheet.create({
     color: "rgba(36,72,62,0.44)",
     fontSize: 28,
     lineHeight: 30,
-    fontWeight: "300",
+    fontWeight: "600",
   },  identityColumn: {
     flex: 1,
     backgroundColor: colors.card,
@@ -4305,7 +4307,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     lineHeight: 23,
     color: colors.text,
-    fontWeight: "900",
+    fontWeight: "600",
   },  currentBookIcon: {
     fontSize: 16,
     lineHeight: 20,
@@ -4356,7 +4358,7 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     color: colors.success,
-    fontWeight: "900",
+    fontWeight: "600",
     textAlign: "center",
   },  bookInputLabel: {
     fontSize: 17,
@@ -4467,7 +4469,7 @@ const styles = StyleSheet.create({
   sessionMinutes: {
     fontSize: 16,
     lineHeight: 22,
-    fontWeight: "900",
+    fontWeight: "600",
     color: colors.accent,
   },
   diaryOpenButton: {
@@ -4876,7 +4878,7 @@ const styles = StyleSheet.create({
     color: "rgba(255,248,237,0.54)",
     fontSize: 12,
     lineHeight: 18,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 1.8,
     textTransform: "uppercase",
     textAlign: "center",
@@ -5045,7 +5047,7 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.64)",
     fontSize: 15,
     lineHeight: 22,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 1.3,
     textTransform: "uppercase",
     textAlign: "center",
@@ -5203,7 +5205,7 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.72)",
     fontSize: 15,
     lineHeight: 21,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   closeSaveButton: {
     flex: 1,
@@ -5216,7 +5218,7 @@ const styles = StyleSheet.create({
     color: colors.sessionBackground,
     fontSize: 15,
     lineHeight: 21,
-    fontWeight: "900",
+    fontWeight: "600",
   },
 
   revealScreen: {
@@ -5241,7 +5243,7 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.68)",
     fontSize: 13,
     lineHeight: 19,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 1.4,
     textTransform: "uppercase",
     textAlign: "center",
@@ -5537,7 +5539,7 @@ const styles = StyleSheet.create({
     color: colors.accentDark,
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 1.1,
     textTransform: "uppercase",
     marginBottom: 8,
@@ -5546,7 +5548,7 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 24,
     lineHeight: 30,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: -0.4,
     marginBottom: 8,
   },
@@ -5593,7 +5595,7 @@ const styles = StyleSheet.create({
     color: colors.accentDark,
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   revealContinueButton: {
     backgroundColor: colors.paper,
@@ -5605,7 +5607,7 @@ const styles = StyleSheet.create({
     color: colors.sessionBackground,
     fontSize: 16,
     lineHeight: 22,
-    fontWeight: "900",
+    fontWeight: "600",
   },
 
   bookShrineHero: {
@@ -5691,13 +5693,13 @@ const styles = StyleSheet.create({
     color: colors.accent,
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   bookShrineStage: {
     color: "rgba(47,93,80,0.58)",
     fontSize: 11,
     lineHeight: 16,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 1.3,
     textTransform: "uppercase",
   },
@@ -6148,7 +6150,7 @@ const styles = StyleSheet.create({
     color: "rgba(31,41,51,0.58)",
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: "900",
+    fontWeight: "600",
     marginBottom: 10,
   },
   recentBookChoice: {
@@ -6273,7 +6275,7 @@ const styles = StyleSheet.create({
     color: "rgba(47,93,80,0.72)",
     fontSize: 15,
     lineHeight: 21,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   bookReturnSaveButton: {
     flex: 1,
@@ -6286,7 +6288,7 @@ const styles = StyleSheet.create({
     color: colors.paper,
     fontSize: 15,
     lineHeight: 21,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   bookRevealScreen: {
     flex: 1,
@@ -6306,7 +6308,7 @@ const styles = StyleSheet.create({
     color: "rgba(47,93,80,0.62)",
     fontSize: 13,
     lineHeight: 19,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 1.4,
     textTransform: "uppercase",
     textAlign: "center",
@@ -6394,6 +6396,13 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     marginTop: 10,
   },
+  bookRevealStickyActions: {
+    backgroundColor: "rgba(247,243,234,0.92)",
+    borderTopWidth: 1,
+    borderTopColor: "rgba(47,93,80,0.08)",
+    paddingTop: 14,
+    paddingBottom: 2,
+  },
   bookRevealContinueButton: {
     backgroundColor: colors.accentDark,
     borderRadius: 999,
@@ -6404,7 +6413,7 @@ const styles = StyleSheet.create({
     color: colors.paper,
     fontSize: 16,
     lineHeight: 22,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   bookRevealSecondaryButton: {
     alignItems: "center",
