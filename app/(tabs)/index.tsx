@@ -4499,7 +4499,6 @@ const styles = StyleSheet.create({
   },
   diaryContent: {
     paddingHorizontal: 24,
-    paddingTop: 72,
     paddingBottom: 48,
   },
   diaryBackButton: {
