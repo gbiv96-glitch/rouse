@@ -105,7 +105,8 @@ type Screen =
   | "completedBook"
   | "reveal"
   | "diary"
-  | "finishedBooks";
+  | "finishedBooks"
+  | "finishedBookDetail";
 
 type SanctuaryStage = {
   stage: number;
@@ -168,10 +169,10 @@ const readingRitualLines = [
 ];
 
 const completedBookReflectionPrompts = [
-  "What did this book give you?",
-  "What will you carry from this?",
-  "One line you'll remember.",
-  "How did you feel when it ended?",
+  "What will you remember?",
+  "What did this book leave with you?",
+  "A line, feeling, or thought to keep.",
+  "What stayed with you after the last page?",
 ];
 
 const completedBookSparkPositions = [
@@ -336,6 +337,18 @@ function getCompletedBookShelfDate(completedAt: string) {
   });
 }
 
+function getCompletedBookDetailDate(completedAt: string) {
+  const timestamp = new Date(completedAt).getTime();
+
+  if (!Number.isFinite(timestamp)) return "Recently";
+
+  return new Date(timestamp).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
 function getCompletedBookReviewText(book: CompletedBookReview) {
   return typeof book.review === "string" ? book.review.trim() : "";
 }
@@ -401,6 +414,8 @@ export default function HomeScreen() {
   const [completedBooks, setCompletedBooks] = useState<CompletedBookReview[]>(
     [],
   );
+  const [selectedCompletedBook, setSelectedCompletedBook] =
+    useState<CompletedBookReview | null>(null);
   const [finishedBookCoverErrorIds, setFinishedBookCoverErrorIds] = useState<
     string[]
   >([]);
@@ -495,6 +510,17 @@ export default function HomeScreen() {
       );
     }
   }, [completedBookMoment, resetInvalidTransientScreen, sanctuaryReveal, screen]);
+
+  useEffect(() => {
+    if (screen !== "finishedBookDetail" || selectedCompletedBook) {
+      return;
+    }
+
+    console.warn(
+      "Rousd finished-book detail opened without a selectedCompletedBook; returning to shelf.",
+    );
+    setScreen(completedBooks.length > 0 ? "finishedBooks" : "home");
+  }, [completedBooks.length, screen, selectedCompletedBook]);
 
   useEffect(() => {
     const keyboardShowEvent =
@@ -1427,7 +1453,12 @@ export default function HomeScreen() {
   };
 
   const finishCompletedBookMoment = async (reviewOverride?: string) => {
-    if (!completedBookMoment) return;
+    if (!completedBookMoment) {
+      resetInvalidTransientScreen(
+        "Rousd completed-book action ran without completedBookMoment; returning home.",
+      );
+      return false;
+    }
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     await saveCompletedBookReview(
@@ -1443,6 +1474,7 @@ export default function HomeScreen() {
     setCompletedBookReview("");
     setCompletedBookMoment(null);
     setSanctuaryReveal(null);
+    return true;
   };
 
   const openManualLog = async () => {
@@ -2332,10 +2364,6 @@ export default function HomeScreen() {
       );
       const reflectionPrompt =
         completedBookReflectionPrompts[completedBookPromptIndex];
-      const completedBookDaysLine =
-        daysCount === 1
-          ? "You read it today."
-          : `You read it across ${daysCount} days.`;
       const completedBookSessionLabel =
         completedBookMoment.sessionCount === 1 ? "SESSION" : "SESSIONS";
       const completedBookCoverUrl = completedBookMoment.coverUrl ?? null;
@@ -2452,10 +2480,10 @@ export default function HomeScreen() {
           </View>
 
           <ThemedText style={styles.completedBookHeadline}>
-            This book has a history with you now.
+            You finished this one.
           </ThemedText>
           <ThemedText style={styles.completedBookSubline}>
-            {`${completedBookDaysLine}\nIt will stay in your reading life.`}
+            {`${completedBookMoment.title} now has a place in your reading life.`}
           </ThemedText>
 
           <View
@@ -2506,8 +2534,9 @@ export default function HomeScreen() {
                 pressed && styles.buttonPressed,
               ]}
               onPress={async () => {
-                await finishCompletedBookMoment();
-                setScreen("finishedBooks");
+                if (await finishCompletedBookMoment()) {
+                  setScreen("finishedBooks");
+                }
               }}
             >
               <ThemedText style={styles.completedBookReturnButtonText}>
@@ -2521,8 +2550,9 @@ export default function HomeScreen() {
                 pressed && styles.buttonPressed,
               ]}
               onPress={async () => {
-                await finishCompletedBookMoment("");
-                setScreen("finishedBooks");
+                if (await finishCompletedBookMoment("")) {
+                  setScreen("finishedBooks");
+                }
               }}
             >
               <ThemedText style={styles.completedBookSkipButtonText}>
@@ -2870,7 +2900,16 @@ export default function HomeScreen() {
               <View style={styles.finishedBooksShelf}>
                 {completedBooks.map((book, index) => (
                   <View key={book.id}>
-                    <View style={styles.finishedBookCard}>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.finishedBookCard,
+                        pressed && styles.buttonPressed,
+                      ]}
+                      onPress={() => {
+                        setSelectedCompletedBook(book);
+                        setScreen("finishedBookDetail");
+                      }}
+                    >
                       <View
                         style={[
                           styles.finishedBookCover,
@@ -2917,11 +2956,16 @@ export default function HomeScreen() {
                             {getCompletedBookShelfDate(book.completedAt)}
                           </ThemedText>
                         </View>
-                        <ThemedText style={styles.finishedBookMeta}>
-                          {formatDuration(Number(book.totalBookMinutes ?? book.sessionMinutes))} Â·{" "}
-                          {book.sessionCount ?? 1}{" "}
-                          {(book.sessionCount ?? 1) === 1 ? "session" : "sessions"}
-                        </ThemedText>
+                        <View style={styles.finishedBookMeta}>
+                          <ThemedText style={styles.finishedBookMetaText}>
+                            {formatDuration(Number(book.totalBookMinutes ?? book.sessionMinutes))}
+                          </ThemedText>
+                          <View style={styles.finishedBookMetaDot} />
+                          <ThemedText style={styles.finishedBookMetaText}>
+                            {book.sessionCount ?? 1}{" "}
+                            {(book.sessionCount ?? 1) === 1 ? "session" : "sessions"}
+                          </ThemedText>
+                        </View>
                         {getCompletedBookReviewText(book).length > 0 ? (
                           <ThemedText
                             style={styles.finishedBookReview}
@@ -2931,7 +2975,7 @@ export default function HomeScreen() {
                           </ThemedText>
                         ) : null}
                       </View>
-                    </View>
+                    </Pressable>
                     {index < completedBooks.length - 1 ? (
                       <View style={styles.finishedBookSeparator} />
                     ) : null}
@@ -2965,6 +3009,154 @@ export default function HomeScreen() {
           </ScrollView>
         </ThemedView>
       );
+
+    case "finishedBookDetail": {
+      if (!selectedCompletedBook) {
+        return (
+          <ThemedView style={styles.loadingContainer}>
+            <ThemedText style={styles.loadingWordmark}>Rousd</ThemedText>
+          </ThemedView>
+        );
+      }
+
+      const finishedBookReviewText = getCompletedBookReviewText(selectedCompletedBook);
+      const finishedBookSessionCount = selectedCompletedBook.sessionCount ?? 1;
+      const finishedBookSessionLabel =
+        finishedBookSessionCount === 1 ? "SESSION" : "SESSIONS";
+      const finishedBookCoverUrl = selectedCompletedBook.coverUrl ?? null;
+      const shouldShowFinishedBookCoverImage =
+        Boolean(finishedBookCoverUrl) &&
+        !finishedBookCoverErrorIds.includes(selectedCompletedBook.id);
+
+      return (
+        <ThemedView style={styles.completedBookScreen}>
+          <ScrollView
+            contentContainerStyle={[
+              styles.completedBookRevealContent,
+              {
+                paddingTop: insets.top + 30,
+                paddingBottom: insets.bottom + 72,
+              },
+            ]}
+          >
+            <ThemedText style={styles.completedBookEyebrow}>
+              FINISHED BOOK
+            </ThemedText>
+
+            <View style={styles.completedBookCoverStage}>
+              <View style={styles.completedBookAmbientGlow} />
+              <View
+                style={[
+                  styles.completedBookCover,
+                  shouldShowFinishedBookCoverImage &&
+                    styles.completedBookCoverWithImage,
+                ]}
+              >
+                {shouldShowFinishedBookCoverImage && finishedBookCoverUrl ? (
+                  <Image
+                    source={{ uri: finishedBookCoverUrl }}
+                    style={styles.completedBookCoverImage}
+                    resizeMode="cover"
+                    onError={() =>
+                      setFinishedBookCoverErrorIds((coverErrorIds) =>
+                        coverErrorIds.includes(selectedCompletedBook.id)
+                          ? coverErrorIds
+                          : [...coverErrorIds, selectedCompletedBook.id],
+                      )
+                    }
+                  />
+                ) : (
+                  <ThemedText
+                    style={styles.completedBookCoverTitle}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {selectedCompletedBook.title}
+                  </ThemedText>
+                )}
+              </View>
+            </View>
+
+            <ThemedText style={styles.completedBookTitle} numberOfLines={3}>
+              {selectedCompletedBook.title}
+            </ThemedText>
+
+            <View style={styles.completedBookStatsRow}>
+              <View style={styles.completedBookStat}>
+                <ThemedText
+                  style={styles.completedBookStatValue}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.74}
+                >
+                  {getCompletedBookDetailDate(selectedCompletedBook.completedAt)}
+                </ThemedText>
+                <ThemedText style={styles.completedBookStatLabel}>
+                  COMPLETED
+                </ThemedText>
+              </View>
+              <View style={styles.completedBookStatDivider} />
+              <View style={styles.completedBookStat}>
+                <ThemedText style={styles.completedBookStatValue}>
+                  {formatDuration(
+                    Number(
+                      selectedCompletedBook.totalBookMinutes ??
+                        selectedCompletedBook.sessionMinutes,
+                    ),
+                  )}
+                </ThemedText>
+                <ThemedText style={styles.completedBookStatLabel}>
+                  TIME SPENT
+                </ThemedText>
+              </View>
+              <View style={styles.completedBookStatDivider} />
+              <View style={styles.completedBookStat}>
+                <ThemedText style={styles.completedBookStatValue}>
+                  {finishedBookSessionCount}
+                </ThemedText>
+                <ThemedText style={styles.completedBookStatLabel}>
+                  {finishedBookSessionLabel}
+                </ThemedText>
+              </View>
+            </View>
+
+            <ThemedText style={styles.completedBookHeadline}>
+              You finished this one.
+            </ThemedText>
+            <ThemedText style={styles.completedBookSubline}>
+              {`${selectedCompletedBook.title} has a place in your reading life.`}
+            </ThemedText>
+
+            {finishedBookReviewText ? (
+              <View style={styles.completedBookDetailReviewWrap}>
+                <ThemedText style={styles.completedBookReflectionLabel}>
+                  Saved note
+                </ThemedText>
+                <ThemedText style={styles.completedBookDetailReviewText}>
+                  {finishedBookReviewText}
+                </ThemedText>
+              </View>
+            ) : null}
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.completedBookDetailReturnButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => {
+                setSelectedCompletedBook(null);
+                setScreen("finishedBooks");
+              }}
+            >
+              <ThemedText style={styles.completedBookDetailReturnButtonText}>
+                Return to shelf
+              </ThemedText>
+            </Pressable>
+          </ScrollView>
+        </ThemedView>
+      );
+    }
+
     case "home":
       return (
     <ScrollView
@@ -3790,412 +3982,6 @@ const styles = StyleSheet.create({
   homeMenuCloseText: {
     color: "rgba(47,93,80,0.56)",
   },
-  sanctuaryHeroScene: {
-    height: 186,
-    backgroundColor: "#1B4234",
-    overflow: "hidden",
-    borderBottomWidth: 1,
-    borderBottomColor: "rgba(255,248,237,0.08)",
-  },  sanctuaryHeroMoonGlow: {
-    position: "absolute",
-    top: 30,
-    left: 42,
-    width: 108,
-    height: 108,
-    borderRadius: 54,
-    backgroundColor: "rgba(247,195,107,0.14)",
-  },  sanctuaryHeroWindowFrame: {
-    position: "absolute",
-    top: 46,
-    left: 96,
-    right: 96,
-    height: 110,
-    borderRadius: 56,
-    borderWidth: 2,
-    borderColor: "rgba(255,248,237,0.34)",
-  },  sanctuaryHeroBackWallShelf: {
-    position: "absolute",
-    top: 156,
-    left: 34,
-    width: 116,
-    height: 10,
-    borderRadius: 999,
-    backgroundColor: "rgba(106,70,59,0.26)",
-  },  sanctuaryHeroRug: {
-    position: "absolute",
-    left: 72,
-    right: 72,
-    bottom: 24,
-    height: 26,
-    borderRadius: 999,
-    backgroundColor: "rgba(201,133,104,0.62)",
-  },  sanctuaryHeroBlanket: {
-    position: "absolute",
-    right: 8,
-    bottom: 7,
-    width: 31,
-    height: 39,
-    borderRadius: 14,
-    backgroundColor: "rgba(247,195,107,0.72)",
-  },  sanctuaryHeroPlantPot: {
-    position: "absolute",
-    right: 72,
-    bottom: 48,
-    width: 36,
-    height: 26,
-    borderRadius: 12,
-    backgroundColor: "rgba(201,133,104,0.78)",
-  },  sanctuaryHeroLeafOne: {
-    right: 82,
-    bottom: 72,
-    transform: [{ rotate: "-24deg" }],
-  },  sanctuaryHeroQuietCorner: {
-    position: "absolute",
-    right: 40,
-    bottom: 50,
-    width: 74,
-    height: 24,
-    borderRadius: 999,
-    backgroundColor: "rgba(23,56,38,0.28)",
-    alignItems: "center",
-    justifyContent: "center",
-  },  sanctuaryHeroStove: {
-    position: "absolute",
-    right: 42,
-    bottom: 46,
-    width: 72,
-    height: 54,
-    borderRadius: 15,
-    backgroundColor: "#39413C",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.14)",
-    shadowColor: "#EF8F3E",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
-    elevation: 5,
-  },  sanctuaryHeroStoveTop: {
-    position: "absolute",
-    top: -6,
-    left: 13,
-    right: 13,
-    height: 8,
-    borderRadius: 5,
-    backgroundColor: "#48514B",
-  },  sanctuaryHeroStoveWindow: {
-    width: 42,
-    height: 26,
-    borderRadius: 8,
-    backgroundColor: "#2A2925",
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-  },  sanctuaryHeroFireGlow: {
-    position: "absolute",
-    width: 44,
-    height: 28,
-    borderRadius: 15,
-    backgroundColor: "rgba(239,143,62,0.72)",
-  },  sanctuaryHeroStoveLegLeft: {
-    position: "absolute",
-    left: 13,
-    bottom: -8,
-    width: 8,
-    height: 13,
-    borderRadius: 3,
-    backgroundColor: "#39413C",
-  },  sanctuaryHeroBookStack: {
-    position: "absolute",
-    left: 34,
-    bottom: 44,
-    width: 56,
-    gap: 4,
-  },  sanctuaryHeroBookTwo: {
-    width: 42,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "rgba(201,133,104,0.78)",
-  },  sanctuaryHeroMug: {
-    position: "absolute",
-    left: 156,
-    bottom: 92,
-    width: 25,
-    height: 19,
-    borderRadius: 10,
-    backgroundColor: colors.paper,
-  },  sanctuaryHeroVine: {
-    position: "absolute",
-    top: 30,
-    left: 38,
-    right: 44,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(116,138,93,0.58)",
-  },  sanctuaryHeroHangingLeafTwo: {
-    position: "absolute",
-    top: 42,
-    left: 76,
-    width: 22,
-    height: 44,
-    borderRadius: 16,
-    backgroundColor: "rgba(95,117,77,0.62)",
-    transform: [{ rotate: "18deg" }],
-  },  sanctuaryHeroShelfBookOne: {
-    width: 10,
-    height: 24,
-    borderRadius: 2,
-    backgroundColor: "#F7C36B",
-  },  sanctuaryHeroShelfBookThree: {
-    width: 10,
-    height: 30,
-    borderRadius: 2,
-    backgroundColor: "rgba(201,133,104,0.78)",
-  },  sanctuaryHeroProgressPill: {
-    position: "absolute",
-    top: 16,
-    right: 16,
-    backgroundColor: "rgba(255,248,237,0.68)",
-    borderRadius: 999,
-    paddingVertical: 6,
-    paddingHorizontal: 11,
-    borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.28)",
-    zIndex: 3,
-  },  sanctuaryHeroCopy: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 17,
-    backgroundColor: "#0B2A22",
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255,248,237,0.10)",
-  },  sanctuaryHeroTitle: {
-    color: colors.paper,
-    fontSize: 30,
-    lineHeight: 35,
-    fontWeight: "400",
-    letterSpacing: -1.05,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
-  },  sanctuaryHeroSubtitle: {
-    color: "rgba(255,248,237,0.78)",
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: "600",
-  },  sanctuaryMilestoneText: {
-    color: "rgba(255,248,237,0.82)",
-    fontSize: 11,
-    lineHeight: 16,
-    fontWeight: "800",
-  },  sanctuaryHeroIconBadge: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,248,237,0.13)",
-    borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.12)",
-  },
-  sanctuaryHeroIcon: {
-    color: colors.paper,
-    fontSize: 19,
-    lineHeight: 24,
-    fontWeight: "600",
-  },  sanctuaryHeroStatNumber: {
-    color: colors.paper,
-    fontSize: 19,
-    lineHeight: 24,
-    fontWeight: "700",
-    letterSpacing: -0.35,
-  },  sanctuaryHeroStatDivider: {
-    width: 1,
-    height: 32,
-    backgroundColor: "rgba(255,248,237,0.18)",
-  },  sanctuaryHeaderRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    justifyContent: "space-between",
-    backgroundColor: "transparent",
-    marginBottom: 10,
-  },  sanctuaryEyebrow: {
-    color: "rgba(47,93,80,0.62)",
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: "900",
-    letterSpacing: 1.1,
-    textTransform: "uppercase",
-    marginBottom: 4,
-  },  sanctuaryStagePill: {
-    backgroundColor: "rgba(23,56,38,0.08)",
-    borderRadius: 999,
-    paddingVertical: 7,
-    paddingHorizontal: 11,
-    borderWidth: 1,
-    borderColor: "rgba(23,56,38,0.08)",
-  },  sanctuaryScene: {
-    height: 210,
-    borderRadius: 26,
-    backgroundColor: "#1F472F",
-    overflow: "hidden",
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: "rgba(23,56,38,0.14)",
-  },  sanctuaryHearthAura: {
-    position: "absolute",
-    right: 10,
-    bottom: 18,
-    width: 144,
-    height: 112,
-    borderRadius: 56,
-    backgroundColor: "rgba(239,143,62,0.20)",
-  },  sanctuaryWindowDivider: {
-    position: "absolute",
-    top: 35,
-    alignSelf: "center",
-    width: 2,
-    height: 102,
-    borderRadius: 1,
-    backgroundColor: "rgba(255,248,237,0.44)",
-  },  sanctuaryRug: {
-    position: "absolute",
-    left: 64,
-    right: 64,
-    bottom: 24,
-    height: 30,
-    borderRadius: 20,
-    backgroundColor: "rgba(201,133,104,0.88)",
-  },  sanctuaryBlanket: {
-    position: "absolute",
-    right: 10,
-    bottom: 8,
-    width: 32,
-    height: 42,
-    borderRadius: 12,
-    backgroundColor: "rgba(247,195,107,0.78)",
-  },  sanctuaryLeaf: {
-    position: "absolute",
-    right: 78,
-    bottom: 78,
-    width: 28,
-    height: 42,
-    borderRadius: 20,
-    backgroundColor: "rgba(116,138,93,0.72)",
-  },  sanctuaryLeafTwo: {
-    right: 94,
-    bottom: 82,
-    backgroundColor: "rgba(95,117,77,0.70)",
-    transform: [{ rotate: "24deg" }],
-  },  unlitCorner: {
-    position: "absolute",
-    right: 38,
-    bottom: 56,
-    width: 64,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: "rgba(23,56,38,0.20)",
-    alignItems: "center",
-    justifyContent: "center",
-  },  ironStove: {
-    position: "absolute",
-    right: 32,
-    bottom: 54,
-    width: 72,
-    height: 54,
-    borderRadius: 13,
-    backgroundColor: "#39413C",
-    borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.14)",
-    shadowColor: "#EF8F3E",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.22,
-    shadowRadius: 12,
-    elevation: 4,
-  },  ironStoveTop: {
-    position: "absolute",
-    top: -5,
-    left: 12,
-    right: 12,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "#48514B",
-  },  ironStoveWindow: {
-    position: "absolute",
-    top: 13,
-    left: 14,
-    right: 14,
-    height: 26,
-    borderRadius: 7,
-    backgroundColor: "#2A2925",
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-  },  fireGlow: {
-    position: "absolute",
-    width: 44,
-    height: 26,
-    borderRadius: 15,
-    backgroundColor: "rgba(239,143,62,0.88)",
-  },  ironStoveLegLeft: {
-    position: "absolute",
-    left: 12,
-    bottom: -8,
-    width: 8,
-    height: 12,
-    borderRadius: 3,
-    backgroundColor: "#39413C",
-  },  sanctuaryBookStack: {
-    position: "absolute",
-    left: 28,
-    bottom: 54,
-    width: 48,
-    height: 28,
-    justifyContent: "flex-end",
-    backgroundColor: "transparent",
-  },  sanctuaryBookTwo: {
-    width: 36,
-    height: 7,
-    borderRadius: 3,
-    backgroundColor: "rgba(201,133,104,0.78)",
-    marginBottom: 3,
-  },  sanctuaryMug: {
-    position: "absolute",
-    left: 166,
-    bottom: 56,
-    width: 24,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: colors.paper,
-  },  sanctuaryShelfBookOne: {
-    width: 10,
-    height: 24,
-    borderRadius: 2,
-    backgroundColor: "#F7C36B",
-  },  sanctuaryShelfBookThree: {
-    width: 10,
-    height: 28,
-    borderRadius: 2,
-    backgroundColor: "rgba(201,133,104,0.78)",
-  },  sanctuaryHangingLeaf: {
-    position: "absolute",
-    top: 48,
-    right: 54,
-    width: 30,
-    height: 58,
-    borderRadius: 18,
-    backgroundColor: "rgba(116,138,93,0.66)",
-    transform: [{ rotate: "-12deg" }],
-  },  sanctuarySubCopy: {
-    color: "rgba(31,41,51,0.64)",
-    fontSize: 14,
-    lineHeight: 21,
-    fontWeight: "600",
-    marginTop: 5,
-  },
   startHero: {
     minHeight: 64,
     marginTop: 2,
@@ -4794,10 +4580,22 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   finishedBookMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+    backgroundColor: "transparent",
+    marginTop: 4,
+  },
+  finishedBookMetaText: {
     color: colors.warmMuted,
     fontSize: 11,
     lineHeight: 16,
-    marginTop: 4,
+  },
+  finishedBookMetaDot: {
+    width: 3,
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: "rgba(107,101,96,0.48)",
   },
   finishedBookDate: {
     color: colors.brass,
@@ -5221,313 +5019,9 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
-  revealScreen: {
-    flex: 1,
-    backgroundColor: colors.sessionBackground,
-    paddingHorizontal: 24,
-    paddingTop: 70,
-    paddingBottom: 34,
-    overflow: "hidden",
-  },
   revealAnimatedShell: {
     flex: 1,
     backgroundColor: "transparent",
-  },
-  revealContent: {
-    flexGrow: 1,
-    justifyContent: "center",
-    backgroundColor: "transparent",
-    paddingVertical: 28,
-  },
-  revealEyebrow: {
-    color: "rgba(255,255,255,0.68)",
-    fontSize: 13,
-    lineHeight: 19,
-    fontWeight: "600",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    textAlign: "center",
-    marginBottom: 12,
-  },
-  revealTitle: {
-    color: colors.paper,
-    fontSize: 34,
-    lineHeight: 41,
-    fontWeight: "400",
-    letterSpacing: -0.8,
-    textAlign: "center",
-    marginBottom: 22,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
-  },
-  revealSceneCard: {
-    height: 260,
-    borderRadius: 34,
-    backgroundColor: "#1F472F",
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.16)",
-    overflow: "hidden",
-    marginBottom: 18,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 14 },
-    shadowOpacity: 0.16,
-    shadowRadius: 22,
-    elevation: 6,
-  },
-  revealWindowGlow: {
-    position: "absolute",
-    top: 28,
-    left: 50,
-    right: 50,
-    height: 112,
-    borderRadius: 58,
-    backgroundColor: "#F7C36B",
-    opacity: 0.78,
-  },
-  revealHearthAura: {
-    position: "absolute",
-    right: 20,
-    bottom: 22,
-    width: 150,
-    height: 116,
-    borderRadius: 58,
-    backgroundColor: "rgba(239,143,62,0.22)",
-  },
-  revealWindowFrame: {
-    position: "absolute",
-    top: 34,
-    left: 68,
-    right: 68,
-    height: 114,
-    borderRadius: 58,
-    borderWidth: 2,
-    borderColor: "rgba(255,248,237,0.46)",
-  },
-  revealWindowDivider: {
-    position: "absolute",
-    top: 40,
-    alignSelf: "center",
-    width: 2,
-    height: 102,
-    borderRadius: 1,
-    backgroundColor: "rgba(255,248,237,0.42)",
-  },
-  revealFloor: {
-    position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    height: 82,
-    backgroundColor: "rgba(184, 144, 104, 0.72)",
-  },
-  revealRug: {
-    position: "absolute",
-    left: 74,
-    right: 74,
-    bottom: 24,
-    height: 28,
-    borderRadius: 999,
-    backgroundColor: "rgba(201,133,104,0.78)",
-  },
-  revealChair: {
-    position: "absolute",
-    left: 82,
-    bottom: 54,
-    width: 74,
-    height: 76,
-    borderRadius: 24,
-    backgroundColor: "rgba(106,70,59,0.82)",
-  },
-  revealBlanket: {
-    position: "absolute",
-    right: 10,
-    bottom: 10,
-    width: 34,
-    height: 38,
-    borderRadius: 12,
-    backgroundColor: "#F7C36B",
-    opacity: 0.82,
-  },
-  revealPlantPot: {
-    position: "absolute",
-    right: 82,
-    bottom: 54,
-    width: 34,
-    height: 26,
-    borderRadius: 10,
-    backgroundColor: "rgba(201,133,104,0.78)",
-  },
-  revealLeaf: {
-    position: "absolute",
-    width: 30,
-    height: 42,
-    borderRadius: 20,
-    backgroundColor: "rgba(116,138,93,0.72)",
-  },
-  revealLeafOne: {
-    right: 94,
-    bottom: 78,
-    transform: [{ rotate: "-24deg" }],
-  },
-  revealLeafTwo: {
-    right: 70,
-    bottom: 82,
-    backgroundColor: "rgba(95,117,77,0.70)",
-    transform: [{ rotate: "24deg" }],
-  },
-  revealIronStove: {
-    position: "absolute",
-    right: 42,
-    bottom: 60,
-    width: 72,
-    height: 54,
-    borderRadius: 13,
-    backgroundColor: "#39413C",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.14)",
-  },
-  revealIronStovePipe: {
-    position: "absolute",
-    top: -58,
-    width: 8,
-    height: 64,
-    borderRadius: 4,
-    backgroundColor: "#39413C",
-  },
-  revealIronStoveTop: {
-    position: "absolute",
-    top: -5,
-    left: 12,
-    right: 12,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "#48514B",
-  },
-  revealIronStoveHandle: {
-    position: "absolute",
-    top: 9,
-    right: 9,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "rgba(255,248,237,0.22)",
-  },
-  revealIronStoveWindow: {
-    width: 42,
-    height: 26,
-    borderRadius: 7,
-    backgroundColor: "#2A2925",
-    alignItems: "center",
-    justifyContent: "center",
-    overflow: "hidden",
-  },
-  revealFireGlow: {
-    position: "absolute",
-    width: 38,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "#EF8F3E",
-    opacity: 0.78,
-  },
-  revealFireIcon: {
-    color: "#F7C36B",
-    fontSize: 20,
-    lineHeight: 22,
-  },
-  revealIronStoveLegLeft: {
-    position: "absolute",
-    left: 12,
-    bottom: -8,
-    width: 8,
-    height: 12,
-    borderRadius: 3,
-    backgroundColor: "#39413C",
-  },
-  revealIronStoveLegRight: {
-    position: "absolute",
-    right: 12,
-    bottom: -8,
-    width: 8,
-    height: 12,
-    borderRadius: 3,
-    backgroundColor: "#39413C",
-  },
-  revealFaintEmber: {
-    width: 14,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: "#EF8F3E",
-    opacity: 0.62,
-  },
-  revealBookStack: {
-    position: "absolute",
-    left: 46,
-    bottom: 54,
-    gap: 3,
-  },
-  revealBookOne: {
-    width: 44,
-    height: 7,
-    borderRadius: 3,
-    backgroundColor: "#F7C36B",
-  },
-  revealBookTwo: {
-    width: 36,
-    height: 7,
-    borderRadius: 3,
-    backgroundColor: "rgba(201,133,104,0.78)",
-  },
-  revealBookThree: {
-    width: 48,
-    height: 7,
-    borderRadius: 3,
-    backgroundColor: colors.paper,
-  },
-  revealMug: {
-    position: "absolute",
-    left: 166,
-    bottom: 64,
-    width: 24,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: colors.paper,
-  },
-  revealShelf: {
-    position: "absolute",
-    left: 56,
-    top: 74,
-    width: 82,
-    height: 40,
-    borderRadius: 8,
-    backgroundColor: "rgba(106, 70, 59, 0.72)",
-    flexDirection: "row",
-    alignItems: "flex-end",
-    paddingHorizontal: 12,
-    paddingBottom: 8,
-    gap: 4,
-  },
-  revealShelfBookOne: {
-    width: 10,
-    height: 22,
-    borderRadius: 2,
-    backgroundColor: "#F7C36B",
-  },
-  revealShelfBookTwo: {
-    width: 10,
-    height: 17,
-    borderRadius: 2,
-    backgroundColor: colors.paper,
-  },
-  revealShelfBookThree: {
-    width: 10,
-    height: 25,
-    borderRadius: 2,
-    backgroundColor: "rgba(201,133,104,0.78)",
   },
   revealCopyCard: {
     backgroundColor: "rgba(255,248,237,0.94)",
@@ -5582,32 +5076,6 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     fontWeight: "600",
     fontStyle: "italic",
-  },
-  revealMinutesPill: {
-    alignSelf: "flex-start",
-    marginTop: 18,
-    backgroundColor: colors.softAccent,
-    borderRadius: 999,
-    paddingVertical: 8,
-    paddingHorizontal: 13,
-  },
-  revealMinutesText: {
-    color: colors.accentDark,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "600",
-  },
-  revealContinueButton: {
-    backgroundColor: colors.paper,
-    borderRadius: 999,
-    paddingVertical: 16,
-    alignItems: "center",
-  },
-  revealContinueButtonText: {
-    color: colors.sessionBackground,
-    fontSize: 16,
-    lineHeight: 22,
-    fontWeight: "600",
   },
 
   bookShrineHero: {
@@ -6600,6 +6068,21 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     fontStyle: "italic",
   },
+  completedBookDetailReviewWrap: {
+    width: "100%",
+    marginTop: 4,
+  },
+  completedBookDetailReviewText: {
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.1)",
+    borderRadius: 12,
+    padding: 14,
+    color: "rgba(240,235,224,0.82)",
+    fontSize: 14,
+    lineHeight: 21,
+    fontStyle: "italic",
+  },
   completedBookReturnButton: {
     width: "100%",
     height: 48,
@@ -6614,6 +6097,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     fontWeight: "500",
+  },
+  completedBookDetailReturnButton: {
+    width: "100%",
+    alignItems: "center",
+    marginTop: 18,
+    paddingVertical: 10,
+  },
+  completedBookDetailReturnButtonText: {
+    color: "rgba(240,235,224,0.56)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
   },
   completedBookSkipButton: {
     paddingVertical: 6,
