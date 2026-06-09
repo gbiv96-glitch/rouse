@@ -233,7 +233,23 @@ function getSanctuaryRevealCopy(stage: number, stageChanged: boolean) {
 }
 
 function getTodayDateString() {
-  return new Date().toISOString().split("T")[0];
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function parseStoredJson<T>(value: string | null, key: string): T | null {
+  if (value === null) return null;
+
+  try {
+    return JSON.parse(value) as T;
+  } catch (error) {
+    console.log(`Failed to parse Rousd data for ${key}:`, error);
+    return null;
+  }
 }
 
 function calculateElapsedSeconds(startTime: number) {
@@ -432,8 +448,6 @@ export default function HomeScreen() {
   const [bookLookupStatus, setBookLookupStatus] =
     useState<GoogleBooksLookupStatus>("idle");
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
-  const [isBookInputFocused, setIsBookInputFocused] = useState(false);
-  const [bookLookupPanelY, setBookLookupPanelY] = useState<number | null>(null);
   const [hasBookAttributionCoverError, setHasBookAttributionCoverError] =
     useState(false);
   const [sanctuaryReveal, setSanctuaryReveal] =
@@ -462,7 +476,8 @@ export default function HomeScreen() {
   const bookInputScrollRef = useRef<ScrollView | null>(null);
   const bookLookupRequestId = useRef(0);
   const lastBookLookupQuery = useRef<string | null>(null);
-  const bookLookupAutoScrollKey = useRef<string | null>(null);
+  const bookAttributionCardY = useRef<number | null>(null);
+  const bookLookupPanelY = useRef<number | null>(null);
   const bookInputWasManuallyScrolled = useRef(false);
   const bookTitleWasEditedThisVisit = useRef(false);
   const bookTitleDidSelectPrefill = useRef(false);
@@ -553,9 +568,7 @@ export default function HomeScreen() {
     }
 
     if (screen !== "bookInput") {
-      setIsBookInputFocused(false);
       setBookTitleSelection(undefined);
-      bookLookupAutoScrollKey.current = null;
       bookInputWasManuallyScrolled.current = false;
       bookTitleWasEditedThisVisit.current = false;
       bookTitleDidSelectPrefill.current = false;
@@ -656,51 +669,6 @@ export default function HomeScreen() {
       clearTimeout(lookupTimer);
     };
   }, [bookTitle, screen]);
-
-  useEffect(() => {
-    const trimmedQuery = bookTitle.trim().toLowerCase();
-    const canAutoPositionLookup =
-      screen === "bookInput" &&
-      isBookInputFocused &&
-      isKeyboardVisible &&
-      bookLookupPanelY !== null &&
-      trimmedQuery.length >= 4 &&
-      hasBookLookupSearched &&
-      !isBookLookupLoading;
-
-    if (!canAutoPositionLookup || bookInputWasManuallyScrolled.current) {
-      return;
-    }
-
-    const autoScrollKey = `${trimmedQuery}:${bookLookupResults.length}:${bookLookupStatus}`;
-
-    if (bookLookupAutoScrollKey.current === autoScrollKey) {
-      return;
-    }
-
-    bookLookupAutoScrollKey.current = autoScrollKey;
-
-    const scrollTimer = setTimeout(() => {
-      bookInputScrollRef.current?.scrollTo({
-        y: Math.max(bookLookupPanelY - 148, 0),
-        animated: true,
-      });
-    }, 120);
-
-    return () => {
-      clearTimeout(scrollTimer);
-    };
-  }, [
-    bookLookupPanelY,
-    bookLookupResults.length,
-    bookLookupStatus,
-    bookTitle,
-    hasBookLookupSearched,
-    isBookInputFocused,
-    isBookLookupLoading,
-    isKeyboardVisible,
-    screen,
-  ]);
 
   useEffect(() => {
     if (screen !== "ritual") return;
@@ -988,9 +956,12 @@ export default function HomeScreen() {
         if (savedDate !== null) setLastReadDate(savedDate);
         setLifetimeSeconds(savedLifetimeTotalSeconds);
         if (savedSessions !== null) {
-          const parsedSessions: ReadingSession[] = JSON.parse(savedSessions);
+          const parsedSessions = parseStoredJson<ReadingSession[]>(
+            savedSessions,
+            SESSIONS_KEY,
+          );
           let shouldPersistMigratedSessions = false;
-          const migratedSessions = parsedSessions.map((session) => {
+          const migratedSessions = (parsedSessions ?? []).map((session) => {
             if (session.note && !session.reflection) {
               shouldPersistMigratedSessions = true;
               return { ...session, reflection: session.note };
@@ -1018,10 +989,12 @@ export default function HomeScreen() {
         }
 
         if (savedCompletedBooks !== null) {
-          const parsedCompletedBooks: CompletedBookReview[] =
-            JSON.parse(savedCompletedBooks);
+          const parsedCompletedBooks = parseStoredJson<CompletedBookReview[]>(
+            savedCompletedBooks,
+            COMPLETED_BOOKS_KEY,
+          );
           setCompletedBooks(
-            [...parsedCompletedBooks].sort(
+            [...(parsedCompletedBooks ?? [])].sort(
               (first, second) =>
                 new Date(second.completedAt).getTime() -
                 new Date(first.completedAt).getTime(),
@@ -1063,7 +1036,12 @@ export default function HomeScreen() {
         }
 
         if (savedCurrentBookMetadata !== null) {
-          setCurrentBookMetadata(JSON.parse(savedCurrentBookMetadata));
+          setCurrentBookMetadata(
+            parseStoredJson<BookMetadataFields>(
+              savedCurrentBookMetadata,
+              CURRENT_BOOK_METADATA_KEY,
+            ),
+          );
         }
       } catch (error) {
         console.log("Failed to load Rousd data:", error);
@@ -1219,7 +1197,6 @@ export default function HomeScreen() {
 
     if (nextTitle.trim().toLowerCase() !== bookTitle.trim().toLowerCase()) {
       bookInputWasManuallyScrolled.current = false;
-      bookLookupAutoScrollKey.current = null;
     }
 
     setBookTitle(nextTitle);
@@ -1233,7 +1210,35 @@ export default function HomeScreen() {
     bookTitleWasEditedThisVisit.current = true;
     setBookTitleSelection(undefined);
     setSelectedBookMetadata(book);
+    Keyboard.dismiss();
+    bookLookupRequestId.current += 1;
+    lastBookLookupQuery.current = book.title.trim().toLowerCase();
+    bookInputWasManuallyScrolled.current = false;
+    setIsBookLookupLoading(false);
+    setHasBookLookupSearched(false);
+    setBookLookupStatus("idle");
+    setBookLookupResults([]);
     setBookTitle(book.title);
+
+    setTimeout(() => {
+      bookInputScrollRef.current?.scrollTo({
+        y: 0,
+        animated: true,
+      });
+    }, 160);
+  };
+
+  const scrollToBookLookupMatches = () => {
+    const lookupPanelY = bookLookupPanelY.current;
+
+    if (lookupPanelY === null) return;
+
+    Keyboard.dismiss();
+    bookInputWasManuallyScrolled.current = true;
+    bookInputScrollRef.current?.scrollTo({
+      y: Math.max(lookupPanelY - 18, 0),
+      animated: true,
+    });
   };
 
   const saveSession = async (
@@ -1417,9 +1422,11 @@ export default function HomeScreen() {
   ) => {
     const trimmedReview = reviewOverride.trim();
     const savedCompletedBooks = await AsyncStorage.getItem(COMPLETED_BOOKS_KEY);
-    const storedCompletedBooks: CompletedBookReview[] = savedCompletedBooks
-      ? JSON.parse(savedCompletedBooks)
-      : [];
+    const storedCompletedBooks =
+      parseStoredJson<CompletedBookReview[]>(
+        savedCompletedBooks,
+        COMPLETED_BOOKS_KEY,
+      ) ?? [];
 
     const completedBook: CompletedBookReview = {
       id: Date.now().toString(),
@@ -1946,6 +1953,7 @@ export default function HomeScreen() {
           }}
           contentContainerStyle={[
             styles.bookReturnContent,
+            isKeyboardVisible && styles.bookReturnContentWithKeyboard,
             shouldShowBookLookup && styles.bookReturnContentWithLookup,
             shouldShowBookLookup &&
               isKeyboardVisible &&
@@ -1961,7 +1969,12 @@ export default function HomeScreen() {
             Your time was kept - {pendingDuration}
           </ThemedText>
 
-          <View style={styles.bookAttributionCard}>
+          <View
+            style={styles.bookAttributionCard}
+            onLayout={(event) => {
+              bookAttributionCardY.current = event.nativeEvent.layout.y;
+            }}
+          >
             <View style={styles.bookAttributionCover}>
               {shouldShowBookAttributionCover && bookAttributionCoverUrl ? (
                 <Image
@@ -1986,7 +1999,6 @@ export default function HomeScreen() {
                 returnKeyType="done"
                 onSubmitEditing={saveBookForSession}
                 onFocus={() => {
-                  setIsBookInputFocused(true);
                   const shouldSelectPrefilledTitle =
                     !bookTitleWasEditedThisVisit.current &&
                     !bookTitleDidSelectPrefill.current &&
@@ -2008,10 +2020,15 @@ export default function HomeScreen() {
                   }
 
                   bookInputWasManuallyScrolled.current = false;
-                  bookLookupAutoScrollKey.current = null;
+
+                  setTimeout(() => {
+                    bookInputScrollRef.current?.scrollTo({
+                      y: Math.max((bookAttributionCardY.current ?? 140) - 18, 0),
+                      animated: true,
+                    });
+                  }, 180);
                 }}
                 onBlur={() => {
-                  setIsBookInputFocused(false);
                   setBookTitleSelection(undefined);
                 }}
               />
@@ -2022,6 +2039,20 @@ export default function HomeScreen() {
               ) : null}
             </View>
           </View>
+
+          {bookLookupResults.length > 0 ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.bookLookupAffordance,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={scrollToBookLookupMatches}
+            >
+              <ThemedText style={styles.bookLookupAffordanceText}>
+                View possible matches
+              </ThemedText>
+            </Pressable>
+          ) : null}
 
           <View style={styles.bookCompletedCard}>
             <Pressable
@@ -2074,7 +2105,7 @@ export default function HomeScreen() {
             <View
               style={styles.bookLookupPanel}
               onLayout={(event) => {
-                setBookLookupPanelY(event.nativeEvent.layout.y);
+                bookLookupPanelY.current = event.nativeEvent.layout.y;
               }}
             >
               <View style={styles.bookLookupHeaderRow}>
@@ -2083,7 +2114,7 @@ export default function HomeScreen() {
                 </ThemedText>
                 {isBookLookupLoading ? (
                   <ThemedText style={styles.bookLookupLoading}>
-                    Looking softly...
+                    Searching books…
                   </ThemedText>
                 ) : null}
               </View>
@@ -2181,7 +2212,13 @@ export default function HomeScreen() {
           )}
 
         </ScrollView>
-        <View style={[styles.bookReturnStickyActions, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+        <View
+          pointerEvents="box-none"
+          style={[
+            styles.bookReturnStickyActions,
+            { paddingBottom: Math.max(insets.bottom, 12) },
+          ]}
+        >
           <View style={styles.closeButtonRow}>
             <Pressable
               style={({ pressed }) => [
@@ -2582,11 +2619,11 @@ export default function HomeScreen() {
       const shouldShowRevealCoverImage =
         Boolean(revealCoverUrl) && !hasRevealCoverError;
       const bookRevealBottomPadding =
-        isKeyboardVisible ? insets.bottom + 128 : 28;
+        isKeyboardVisible ? insets.bottom + 36 : 12;
 
       return (
       <ThemedView
-        style={[styles.bookRevealScreen, { paddingTop: insets.top + 30 }]}
+        style={[styles.bookRevealScreen, { paddingTop: insets.top + 22 }]}
       >
         <View pointerEvents="none" style={styles.bookReturnGlowTop} />
         <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
@@ -2719,38 +2756,43 @@ export default function HomeScreen() {
               </ThemedText>
             </View>
 
-          </ScrollView>
-          <View style={styles.bookRevealStickyActions}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.bookRevealContinueButton,
-                pressed && styles.buttonPressed,
+            <View
+              style={[
+                styles.bookRevealStickyActions,
+                { paddingBottom: Math.max(insets.bottom, 12) },
               ]}
-              onPress={() =>
-                dismissSanctuaryReveal({
-                  saveReflection: hasSessionReflection,
-                })
-              }
             >
-              <ThemedText style={styles.bookRevealContinueButtonText}>
-                {hasSessionReflection ? "Save note and return home" : "Return home"}
-              </ThemedText>
-            </Pressable>
-
-            {allowsSessionReflection && hasSessionReflection && (
               <Pressable
                 style={({ pressed }) => [
-                  styles.bookRevealSecondaryButton,
+                  styles.bookRevealContinueButton,
                   pressed && styles.buttonPressed,
                 ]}
-                onPress={() => dismissSanctuaryReveal()}
+                onPress={() =>
+                  dismissSanctuaryReveal({
+                    saveReflection: hasSessionReflection,
+                  })
+                }
               >
-                <ThemedText style={styles.bookRevealSecondaryButtonText}>
-                  Save without a note
+                <ThemedText style={styles.bookRevealContinueButtonText}>
+                  {hasSessionReflection ? "Save note and return home" : "Return home"}
                 </ThemedText>
               </Pressable>
-            )}
-          </View>
+
+              {allowsSessionReflection && hasSessionReflection && (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.bookRevealSecondaryButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={() => dismissSanctuaryReveal()}
+                >
+                  <ThemedText style={styles.bookRevealSecondaryButtonText}>
+                    Save without a note
+                  </ThemedText>
+                </Pressable>
+              )}
+            </View>
+          </ScrollView>
         </Animated.View>
         </KeyboardAvoidingView>
       </ThemedView>
@@ -2764,7 +2806,7 @@ export default function HomeScreen() {
             style={styles.diaryScrollView}
             contentContainerStyle={[
               styles.diaryContent,
-              { paddingTop: insets.top + 48 },
+              { paddingTop: insets.top + 48, paddingBottom: insets.bottom + 48 },
             ]}
           >
             <Pressable
@@ -5025,9 +5067,9 @@ const styles = StyleSheet.create({
   },
   revealCopyCard: {
     backgroundColor: "rgba(255,248,237,0.94)",
-    borderRadius: 28,
-    padding: 22,
-    marginBottom: 16,
+    borderRadius: 24,
+    padding: 18,
+    marginBottom: 12,
   },
   revealStageLabel: {
     color: colors.accentDark,
@@ -5040,8 +5082,8 @@ const styles = StyleSheet.create({
   },
   revealMainCopy: {
     color: colors.text,
-    fontSize: 24,
-    lineHeight: 30,
+    fontSize: 22,
+    lineHeight: 28,
     fontWeight: "600",
     letterSpacing: -0.4,
     marginBottom: 8,
@@ -5054,7 +5096,7 @@ const styles = StyleSheet.create({
   },
   sessionReflectionWrap: {
     backgroundColor: "transparent",
-    marginBottom: 18,
+    marginBottom: 14,
   },
   sessionReflectionLabel: {
     color: "rgba(47,93,80,0.58)",
@@ -5064,7 +5106,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   sessionReflectionInput: {
-    height: 86,
+    height: 68,
     backgroundColor: "rgba(255,248,237,0.76)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.10)",
@@ -5408,6 +5450,10 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     paddingVertical: 36,
   },
+  bookReturnContentWithKeyboard: {
+    justifyContent: "flex-start",
+    paddingTop: 18,
+  },
   bookReturnContentWithLookup: {
     justifyContent: "flex-start",
   },
@@ -5509,6 +5555,22 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: "600",
     marginTop: 6,
+  },
+  bookLookupAffordance: {
+    alignSelf: "center",
+    marginTop: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.10)",
+    backgroundColor: "rgba(255,248,237,0.58)",
+    paddingVertical: 8,
+    paddingHorizontal: 13,
+  },
+  bookLookupAffordanceText: {
+    color: "rgba(47,93,80,0.68)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
   },
   bookLookupPanel: {
     marginTop: 14,
@@ -5770,7 +5832,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "center",
     backgroundColor: "transparent",
-    paddingVertical: 28,
+    paddingVertical: 16,
   },
   bookRevealEyebrow: {
     color: "rgba(47,93,80,0.62)",
@@ -5780,16 +5842,16 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
     textTransform: "uppercase",
     textAlign: "center",
-    marginBottom: 12,
+    marginBottom: 8,
   },
   bookRevealTitle: {
     color: colors.title,
-    fontSize: 34,
-    lineHeight: 41,
+    fontSize: 30,
+    lineHeight: 36,
     fontWeight: "400",
     letterSpacing: -0.8,
     textAlign: "center",
-    marginBottom: 22,
+    marginBottom: 14,
     fontFamily: Platform.select({
       ios: "Georgia",
       android: "serif",
@@ -5799,18 +5861,18 @@ const styles = StyleSheet.create({
   bookRevealCard: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 16,
+    gap: 14,
     backgroundColor: "rgba(255,255,255,0.72)",
-    borderRadius: 30,
-    padding: 18,
+    borderRadius: 24,
+    padding: 14,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
-    marginBottom: 18,
+    marginBottom: 14,
     ...cardShadow,
   },
   bookRevealCover: {
-    width: 86,
-    height: 118,
+    width: 72,
+    height: 100,
     borderRadius: 10,
     backgroundColor: colors.deepGreen,
     alignItems: "center",
@@ -5849,12 +5911,12 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 1,
-    marginBottom: 6,
+    marginBottom: 4,
   },
   bookRevealBookTitle: {
     color: colors.text,
-    fontSize: 20,
-    lineHeight: 25,
+    fontSize: 18,
+    lineHeight: 23,
     fontWeight: "800",
   },
   bookRevealMeta: {
@@ -5862,19 +5924,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     fontWeight: "700",
-    marginTop: 10,
+    marginTop: 7,
   },
   bookRevealStickyActions: {
     backgroundColor: "rgba(247,243,234,0.92)",
     borderTopWidth: 1,
     borderTopColor: "rgba(47,93,80,0.08)",
-    paddingTop: 14,
+    paddingTop: 10,
     paddingBottom: 2,
   },
   bookRevealContinueButton: {
     backgroundColor: colors.accentDark,
     borderRadius: 999,
-    paddingVertical: 16,
+    paddingVertical: 14,
     alignItems: "center",
   },
   bookRevealContinueButtonText: {
