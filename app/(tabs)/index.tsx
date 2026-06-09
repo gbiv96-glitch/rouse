@@ -43,6 +43,11 @@ const ACTIVE_SESSION_TODAY_START_SECONDS_KEY =
   "activeReadingSessionTodayStartSeconds";
 const ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY =
   "activeReadingSessionLifetimeStartSeconds";
+const BOOK_LOOKUP_DEBOUNCE_MS = 900;
+const BOOK_LOOKUP_UI_TIMEOUT_MS = 9500;
+const UNATTACHED_SESSION_TITLE = "Unassigned reading";
+const UNATTACHED_SESSION_DISPLAY_TITLE = "Reading session";
+const UNATTACHED_SESSION_HELPER_TEXT = "Not attached to a book.";
 const colors = {
   background: RousdPalette.parchment,
   card: RousdPalette.card,
@@ -383,6 +388,28 @@ function getValidBookTitle(title?: string | null) {
   return trimmedTitle.length > 0 ? trimmedTitle : null;
 }
 
+function isUnattachedSessionTitle(title?: string | null) {
+  return title?.trim().toLowerCase() === UNATTACHED_SESSION_TITLE.toLowerCase();
+}
+
+function getSessionDisplayTitle(session?: Pick<ReadingSession, "title"> | null) {
+  if (!session) return "";
+
+  return isUnattachedSessionTitle(session.title)
+    ? UNATTACHED_SESSION_DISPLAY_TITLE
+    : session.title;
+}
+
+function getRevealBookDisplayTitle(title?: string | null) {
+  const trimmedTitle = title?.trim();
+
+  if (!trimmedTitle) return "";
+
+  return isUnattachedSessionTitle(trimmedTitle)
+    ? UNATTACHED_SESSION_DISPLAY_TITLE
+    : trimmedTitle;
+}
+
 function getBookMetadataFields(
   metadata?: BookMetadata | null,
 ): BookMetadataFields {
@@ -402,6 +429,7 @@ function getBookMetadataFields(
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const welcomeBottomPadding = Math.max(insets.bottom + 24, 42);
   const [isReading, setIsReading] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [lifetimeSeconds, setLifetimeSeconds] = useState(0);
@@ -638,9 +666,17 @@ export default function HomeScreen() {
     setBookLookupStatus("idle");
 
     const lookupTimer = setTimeout(async () => {
+      let lookupTimeout: ReturnType<typeof setTimeout> | null = null;
+
       try {
         lastBookLookupQuery.current = normalizedQuery;
-        const results = await searchGoogleBooks(trimmedQuery);
+        const results = await new Promise<BookMetadata[]>((resolve, reject) => {
+          lookupTimeout = setTimeout(() => {
+            reject(new Error("Google Books lookup timed out"));
+          }, BOOK_LOOKUP_UI_TIMEOUT_MS);
+
+          searchGoogleBooks(trimmedQuery).then(resolve, reject);
+        });
 
         if (bookLookupRequestId.current !== requestId) {
           return;
@@ -659,11 +695,15 @@ export default function HomeScreen() {
         setBookLookupStatus("error");
         setHasBookLookupSearched(true);
       } finally {
+        if (lookupTimeout) {
+          clearTimeout(lookupTimeout);
+        }
+
         if (bookLookupRequestId.current === requestId) {
           setIsBookLookupLoading(false);
         }
       }
-    }, 900);
+    }, BOOK_LOOKUP_DEBOUNCE_MS);
 
     return () => {
       clearTimeout(lookupTimer);
@@ -1252,7 +1292,7 @@ export default function HomeScreen() {
       ? "title" in bookMetadata
         ? getBookMetadataFields(bookMetadata)
         : bookMetadata
-      : title === "Unassigned reading"
+      : isUnattachedSessionTitle(title)
         ? {}
         : ({ bookSource: "manual" } satisfies BookMetadataFields);
 
@@ -1321,7 +1361,7 @@ export default function HomeScreen() {
 
   const saveBookForSession = async () => {
     const validBookTitle = getValidBookTitle(bookTitle);
-    const titleToSave = validBookTitle || "Unassigned reading";
+    const titleToSave = validBookTitle || UNATTACHED_SESSION_TITLE;
     const shouldCompleteBook = showBookCompletedInput && Boolean(validBookTitle);
     const selectedMetadata =
       validBookTitle && selectedBookMetadata?.title === validBookTitle
@@ -1397,7 +1437,7 @@ export default function HomeScreen() {
   };
 
   const skipBookForSession = async () => {
-    const savedSession = await saveSession("Unassigned reading");
+    const savedSession = await saveSession(UNATTACHED_SESSION_TITLE);
 
     setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
     setShowBookCompletedInput(false);
@@ -1640,24 +1680,28 @@ export default function HomeScreen() {
   };
 
   const visibleSessions = recentSessions.slice(0, 3);
-  const latestSession = recentSessions[0];
-  const hasPlacedBook = Boolean(currentBookTitle || latestSession);
+  const recentBookSessions = recentSessions.filter(
+    (session) => !isUnattachedSessionTitle(session.title),
+  );
+  const visibleRecentBooks = recentBookSessions.slice(0, 2);
+  const latestBookSession = recentBookSessions[0];
+  const hasPlacedBook = Boolean(currentBookTitle || latestBookSession);
   const currentBookDisplayTitle =
-    currentBookTitle || latestSession?.title || "Your next book";
+    currentBookTitle || latestBookSession?.title || "Your next book";
   const latestSessionMatchesCurrentBook =
-    Boolean(currentBookTitle && latestSession?.title === currentBookTitle);
+    Boolean(currentBookTitle && latestBookSession?.title === currentBookTitle);
   const currentBookDisplayMetadata =
     currentBookTitle && currentBookMetadata
       ? currentBookMetadata
       : latestSessionMatchesCurrentBook || !currentBookTitle
-        ? latestSession ?? null
+        ? latestBookSession ?? null
         : null;
   const currentBookCoverUrl = currentBookDisplayMetadata?.coverUrl ?? null;
   const shouldShowCurrentBookCoverImage =
     Boolean(currentBookCoverUrl) && !hasCurrentBookCoverError;
   const currentBookMeta = currentBookTitle
     ? latestSessionMatchesCurrentBook
-      ? `Last read ${formatSessionTimestamp(latestSession.createdAt)}`
+      ? `Last read ${formatSessionTimestamp(latestBookSession.createdAt)}`
       : "Saved as your current book"
     : "Your saved book will live here.";
   const startHeroTitle = "Start reading";
@@ -1665,12 +1709,15 @@ export default function HomeScreen() {
     ? "Your book is waiting."
     : "Your first book can live here.";
   const revealBookTitle =
-    sanctuaryReveal?.bookTitle ||
-    bookTitle.trim() ||
-    manualLogBookTitle.trim() ||
-    currentBookTitle ||
-    latestSession?.title ||
+    getRevealBookDisplayTitle(sanctuaryReveal?.bookTitle) ||
+    getRevealBookDisplayTitle(bookTitle) ||
+    getRevealBookDisplayTitle(manualLogBookTitle) ||
+    getRevealBookDisplayTitle(currentBookTitle) ||
+    getRevealBookDisplayTitle(latestBookSession?.title) ||
     "your book";
+  const revealIsUnattachedSession = isUnattachedSessionTitle(
+    sanctuaryReveal?.bookTitle,
+  );
   const timeAwareGreeting = getTimeAwareGreeting();
   const diarySessions = [...recentSessions].sort(
     (first, second) => getSessionDateValue(second) - getSessionDateValue(first),
@@ -1695,62 +1742,72 @@ export default function HomeScreen() {
 
     case "welcome":
       return (
-      <ThemedView
-        style={[styles.welcomeScreen, { paddingTop: insets.top + 28 }]}
-      >
+      <ThemedView style={styles.welcomeScreen}>
         <View pointerEvents="none" style={styles.welcomeGlowTop} />
         <View pointerEvents="none" style={styles.welcomeGlowBottom} />
 
-        <View style={styles.welcomeCard}>
-          <View style={styles.welcomeSanctuaryPreview}>
-            <View style={styles.welcomeWindowGlow} />
-            <View style={styles.welcomeWindowFrame} />
-            <View style={styles.welcomeWindowDivider} />
-            <View style={styles.welcomeFloor} />
-            <View style={styles.welcomeChair} />
-            <View style={styles.welcomeBookStack}>
-              <View style={styles.welcomeBookOne} />
-              <View style={styles.welcomeBookTwo} />
-              <View style={styles.welcomeBookThree} />
+        <ScrollView
+          style={styles.welcomeScrollView}
+          contentContainerStyle={[
+            styles.welcomeContent,
+            {
+              paddingTop: insets.top + 28,
+              paddingBottom: welcomeBottomPadding,
+            },
+          ]}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={styles.welcomeCard}>
+            <View style={styles.welcomeSanctuaryPreview}>
+              <View style={styles.welcomeWindowGlow} />
+              <View style={styles.welcomeWindowFrame} />
+              <View style={styles.welcomeWindowDivider} />
+              <View style={styles.welcomeFloor} />
+              <View style={styles.welcomeChair} />
+              <View style={styles.welcomeBookStack}>
+                <View style={styles.welcomeBookOne} />
+                <View style={styles.welcomeBookTwo} />
+                <View style={styles.welcomeBookThree} />
+              </View>
+              <View style={styles.welcomePlantPot} />
+              <View style={[styles.welcomeLeaf, styles.welcomeLeafOne]} />
+              <View style={[styles.welcomeLeaf, styles.welcomeLeafTwo]} />
             </View>
-            <View style={styles.welcomePlantPot} />
-            <View style={[styles.welcomeLeaf, styles.welcomeLeafOne]} />
-            <View style={[styles.welcomeLeaf, styles.welcomeLeafTwo]} />
+
+            <ThemedText style={styles.welcomeEyebrow}>Welcome to Rousd</ThemedText>
+            <ThemedText style={styles.welcomeTitle}>
+              Keep a light on for your reading life.
+            </ThemedText>
+            <ThemedText style={styles.welcomeBody}>
+              Start a session, open your book or e-reader, then put your phone down. Rousd keeps time and helps you save the session to the book you read.
+            </ThemedText>
+
+            <View style={styles.welcomeStepsCard}>
+              <View style={styles.welcomeStepRow}>
+                <ThemedText style={styles.welcomeStepNumber}>1</ThemedText>
+                <ThemedText style={styles.welcomeStepText}>Start a reading session</ThemedText>
+              </View>
+              <View style={styles.welcomeStepRow}>
+                <ThemedText style={styles.welcomeStepNumber}>2</ThemedText>
+                <ThemedText style={styles.welcomeStepText}>Read your book or e-reader</ThemedText>
+              </View>
+              <View style={styles.welcomeStepRow}>
+                <ThemedText style={styles.welcomeStepNumber}>3</ThemedText>
+                <ThemedText style={styles.welcomeStepText}>Return and save the book you read</ThemedText>
+              </View>
+            </View>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.welcomeButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={dismissWelcomeScreen}
+            >
+              <ThemedText style={styles.welcomeButtonText}>Enter your reading place</ThemedText>
+            </Pressable>
           </View>
-
-          <ThemedText style={styles.welcomeEyebrow}>Welcome to Rousd</ThemedText>
-          <ThemedText style={styles.welcomeTitle}>
-            Keep a light on for your reading life.
-          </ThemedText>
-          <ThemedText style={styles.welcomeBody}>
-            Start a session, open your book or e-reader, then put your phone down. Rousd keeps time and helps you save the session to the book you read.
-          </ThemedText>
-
-          <View style={styles.welcomeStepsCard}>
-            <View style={styles.welcomeStepRow}>
-              <ThemedText style={styles.welcomeStepNumber}>1</ThemedText>
-              <ThemedText style={styles.welcomeStepText}>Start a reading session</ThemedText>
-            </View>
-            <View style={styles.welcomeStepRow}>
-              <ThemedText style={styles.welcomeStepNumber}>2</ThemedText>
-              <ThemedText style={styles.welcomeStepText}>Read your book or e-reader</ThemedText>
-            </View>
-            <View style={styles.welcomeStepRow}>
-              <ThemedText style={styles.welcomeStepNumber}>3</ThemedText>
-              <ThemedText style={styles.welcomeStepText}>Return and save the book you read</ThemedText>
-            </View>
-          </View>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.welcomeButton,
-              pressed && styles.buttonPressed,
-            ]}
-            onPress={dismissWelcomeScreen}
-          >
-            <ThemedText style={styles.welcomeButtonText}>Enter your reading place</ThemedText>
-          </Pressable>
-        </View>
+        </ScrollView>
       </ThemedView>
     );
   
@@ -1907,7 +1964,11 @@ export default function HomeScreen() {
       const canCompleteBook = Boolean(getValidBookTitle(bookTitle));
       const validBookTitle = getValidBookTitle(bookTitle);
       const bookLookupQueryIsReady = bookTitle.trim().length >= 4;
-      const bookLookupIsResting = bookLookupStatus === "rateLimited";
+      const bookLookupDidFail =
+        bookLookupStatus === "error" || bookLookupStatus === "rateLimited";
+      const bookLookupEmptyMessage = bookLookupDidFail
+        ? "Couldn't check matches right now. You can still save this title."
+        : "No matches found. You can still save this title.";
       const shouldShowBookLookup =
         bookLookupQueryIsReady &&
         (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
@@ -2169,9 +2230,7 @@ export default function HomeScreen() {
               hasBookLookupSearched &&
               bookLookupResults.length === 0 ? (
                 <ThemedText style={styles.bookLookupEmptyText}>
-                  {bookLookupIsResting
-                    ? "Book lookup is resting. You can keep this title."
-                    : "No matches found. You can keep this title."}
+                  {bookLookupEmptyMessage}
                 </ThemedText>
               ) : null}
 
@@ -2183,10 +2242,10 @@ export default function HomeScreen() {
             </View>
           ) : null}
 
-          {visibleSessions.length > 0 && (
+          {visibleRecentBooks.length > 0 && (
             <View style={styles.recentBookPicker}>
               <ThemedText style={styles.recentBookPickerTitle}>Recent books</ThemedText>
-              {visibleSessions.slice(0, 2).map((session) => (
+              {visibleRecentBooks.map((session) => (
                 <Pressable
                   key={session.id}
                   style={({ pressed }) => [
@@ -2694,7 +2753,9 @@ export default function HomeScreen() {
                   {revealBookTitle}
                 </ThemedText>
                 <ThemedText style={styles.bookRevealMeta}>
-                  +{sanctuaryReveal.sessionMinutes} added
+                  {revealIsUnattachedSession
+                    ? UNATTACHED_SESSION_HELPER_TEXT
+                    : `+${sanctuaryReveal.sessionMinutes} added`}
                 </ThemedText>
               </View>
             </Animated.View>
@@ -2747,7 +2808,9 @@ export default function HomeScreen() {
                 {sanctuaryStages[sanctuaryReveal.stage].shortLabel}
               </ThemedText>
               <ThemedText style={styles.revealMainCopy}>
-                {sanctuaryReveal.stageChanged
+                {revealIsUnattachedSession
+                  ? "This reading session has a place in your history."
+                  : sanctuaryReveal.stageChanged
                   ? "Your reading place changed."
                   : "This book has a little more history now."}
               </ThemedText>
@@ -2853,6 +2916,9 @@ export default function HomeScreen() {
                     !previousSession ||
                     formatDiaryDayHeader(previousSession) !== dayHeader;
                   const sessionReflection = getSessionNote(session);
+                  const isUnattachedSession = isUnattachedSessionTitle(
+                    session.title,
+                  );
                   const legacyDate = (session as ReadingSession & {
                     date?: string;
                   }).date;
@@ -2869,14 +2935,18 @@ export default function HomeScreen() {
                         <View style={styles.diaryEntryTopRow}>
                           <View style={styles.diaryEntryCopy}>
                             <ThemedText style={styles.diaryBookTitle}>
-                              {session.title}
+                              {getSessionDisplayTitle(session)}
                             </ThemedText>
                             <ThemedText style={styles.diaryMeta}>
-                              {session.source === "logged" ? "Logged" : "Timed"} -{" "}
-                              {formatSessionTimestamp(
-                                session.createdAt,
-                                legacyDate,
-                              )}
+                              {isUnattachedSession
+                                ? `${UNATTACHED_SESSION_HELPER_TEXT} ${formatSessionTimestamp(
+                                    session.createdAt,
+                                    legacyDate,
+                                  )}`
+                                : `${session.source === "logged" ? "Logged" : "Timed"} - ${formatSessionTimestamp(
+                                    session.createdAt,
+                                    legacyDate,
+                                  )}`}
                             </ThemedText>
                           </View>
 
@@ -3448,9 +3518,12 @@ export default function HomeScreen() {
             </ThemedText>
           ) : (
             visibleSessions.map((session, index) => {
-              const sessionReflection = getSessionNote(session);
+                const sessionReflection = getSessionNote(session);
+                const isUnattachedSession = isUnattachedSessionTitle(
+                  session.title,
+                );
 
-              return (
+                return (
                 <View
                   key={session.id}
                   style={[
@@ -3464,10 +3537,12 @@ export default function HomeScreen() {
 
                   <View style={styles.sessionTextContainer}>
                     <ThemedText style={styles.sessionBookTitle}>
-                      {session.title}
+                      {getSessionDisplayTitle(session)}
                     </ThemedText>
                     <ThemedText style={styles.sessionDate}>
-                      {session.source === "logged" ? "Manually Logged" : "Timed"} - {formatSessionTimestamp(session.createdAt)}
+                      {isUnattachedSession
+                        ? `${UNATTACHED_SESSION_HELPER_TEXT} ${formatSessionTimestamp(session.createdAt)}`
+                        : `${session.source === "logged" ? "Manually Logged" : "Timed"} - ${formatSessionTimestamp(session.createdAt)}`}
                     </ThemedText>
                     {sessionReflection ? (
                       <ThemedText style={styles.sessionNote} numberOfLines={2}>
@@ -3705,11 +3780,16 @@ const styles = StyleSheet.create({
   welcomeScreen: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingHorizontal: 24,
-    paddingTop: 72,
-    paddingBottom: 42,
-    justifyContent: "center",
     overflow: "hidden",
+  },
+  welcomeScrollView: {
+    flex: 1,
+  },
+  welcomeContent: {
+    flexGrow: 1,
+    justifyContent: "center",
+    paddingHorizontal: 24,
+    backgroundColor: "transparent",
   },
   welcomeGlowTop: {
     position: "absolute",

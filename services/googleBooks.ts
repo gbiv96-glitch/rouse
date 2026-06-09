@@ -2,6 +2,7 @@ import type { BookMetadata } from "@/types/book";
 
 const GOOGLE_BOOKS_VOLUME_SEARCH_URL = "https://www.googleapis.com/books/v1/volumes";
 const GOOGLE_BOOKS_MAX_RESULTS = 5;
+const GOOGLE_BOOKS_LOOKUP_TIMEOUT_MS = 8000;
 const googleBooksResultCache = new Map<string, BookMetadata[]>();
 let lastLookupStatus: GoogleBooksLookupStatus = "idle";
 
@@ -42,6 +43,19 @@ type GoogleBooksVolume = {
 type GoogleBooksSearchResponse = {
   totalItems?: number;
   items?: GoogleBooksVolume[];
+};
+
+const fetchWithTimeout = async (url: string): Promise<Response> => {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => {
+    controller.abort();
+  }, GOOGLE_BOOKS_LOOKUP_TIMEOUT_MS);
+
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 
 export function getLastGoogleBooksLookupStatus(): GoogleBooksLookupStatus {
@@ -148,7 +162,7 @@ export async function searchGoogleBooks(query: string): Promise<BookMetadata[]> 
       console.log(`[Rousd Google Books debug] request URL: ${debugUrl}`);
     }
 
-    const response = await fetch(url);
+    const response = await fetchWithTimeout(url);
 
     if (!response.ok) {
       if (response.status === 429) {
