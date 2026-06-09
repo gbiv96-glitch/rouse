@@ -1,4 +1,4 @@
-﻿import AsyncStorage from "@react-native-async-storage/async-storage";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as Haptics from "expo-haptics";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -403,6 +403,7 @@ export default function HomeScreen() {
   const [sessionReflection, setSessionReflection] = useState("");
   const [ritualLineText, setRitualLineText] = useState(readingRitualLines[0]);
   const [manualLogNote, setManualLogNote] = useState("");
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ritualOpacity = useRef(new Animated.Value(0)).current;
@@ -426,6 +427,20 @@ export default function HomeScreen() {
   const completedBookSparkValues = useRef(
     completedBookSparkPositions.map(() => new Animated.Value(0)),
   ).current;
+
+  useEffect(() => {
+    const keyboardShowSubscription = Keyboard.addListener("keyboardDidShow", () => {
+      setIsKeyboardVisible(true);
+    });
+    const keyboardHideSubscription = Keyboard.addListener("keyboardDidHide", () => {
+      setIsKeyboardVisible(false);
+    });
+
+    return () => {
+      keyboardShowSubscription.remove();
+      keyboardHideSubscription.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (screen === "completedBook" && !completedBookMoment) {
@@ -1424,6 +1439,9 @@ export default function HomeScreen() {
   };
 
   const visibleSessions = recentSessions.slice(0, 3);
+  const visiblePickerSessions = recentSessions
+    .filter((session) => session.title !== UNATTACHED_SESSION_TITLE)
+    .slice(0, 3);
   const latestSession = recentSessions[0];
   const hasPlacedBook = Boolean(currentBookTitle || latestSession);
 const currentBookDisplayTitle =
@@ -1817,10 +1835,10 @@ const currentBookDisplayTitle =
             </View>
           ) : null}
 
-          {visibleSessions.length > 0 && (
+          {visiblePickerSessions.length > 0 && (
             <View style={styles.recentBookPicker}>
               <ThemedText style={styles.recentBookPickerTitle}>Recent reading</ThemedText>
-              {visibleSessions.map((session) => (
+              {visiblePickerSessions.map((session) => (
                 <Pressable
                   key={session.id}
                   style={({ pressed }) => [
@@ -2080,6 +2098,9 @@ const currentBookDisplayTitle =
           : `You read it across ${daysCount} days.`;
       const completedBookSessionLabel =
         completedBookMoment.sessionCount === 1 ? "SESSION" : "SESSIONS";
+      const completedBookBottomPadding = isKeyboardVisible
+        ? Math.max(insets.bottom + 24, 32)
+        : insets.bottom + 96;
 
       return (
       <ThemedView style={styles.completedBookScreen}>
@@ -2093,9 +2114,11 @@ const currentBookDisplayTitle =
               keyboardDismissMode="interactive"
               contentContainerStyle={[
                 styles.completedBookRevealContent,
+                isKeyboardVisible &&
+                  styles.completedBookRevealContentWithKeyboard,
                 {
                   paddingTop: insets.top + 30,
-                  paddingBottom: insets.bottom + 96,
+                  paddingBottom: completedBookBottomPadding,
                 },
               ]}
             >
@@ -5860,6 +5883,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 28,
+  },
+  completedBookRevealContentWithKeyboard: {
+    justifyContent: "flex-start",
   },
   completedBookEyebrow: {
     color: "#C4945A",
