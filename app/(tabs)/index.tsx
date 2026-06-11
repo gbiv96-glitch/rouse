@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useEffect, useRef, useState } from "react";
 import {
@@ -113,7 +114,7 @@ type SanctuaryReveal = {
   sessionMinutes: string;
   ctaText: string;
   source: "timed" | "logged";
-};
+} & BookMetadataFields;
 
 const sanctuaryStages: SanctuaryStage[] = [
   {
@@ -242,14 +243,38 @@ function formatSessionTimestamp(createdAt?: string, fallbackDate?: string) {
   });
 
   if (sessionDate.toDateString() === today.toDateString()) {
-    return `Today • ${time}`;
+    return `Today - ${time}`;
   }
 
   if (sessionDate.toDateString() === yesterday.toDateString()) {
-    return `Yesterday • ${time}`;
+    return `Yesterday - ${time}`;
   }
 
-  return `${sessionDate.toLocaleDateString()} • ${time}`;
+  return `${sessionDate.toLocaleDateString()} - ${time}`;
+}
+
+function formatCurrentBookTimestamp(createdAt?: string) {
+  if (!createdAt) return "Recently";
+
+  const sessionDate = new Date(createdAt);
+
+  if (Number.isNaN(sessionDate.getTime())) {
+    return "Recently";
+  }
+
+  const now = new Date();
+  const includesYear = sessionDate.getFullYear() !== now.getFullYear();
+  const date = sessionDate.toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+    ...(includesYear ? { year: "numeric" as const } : {}),
+  });
+  const time = sessionDate.toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  return `${date} \u00B7 ${time}`;
 }
 
 function getSessionDateValue(session: ReadingSession) {
@@ -325,15 +350,6 @@ function getCompletedBookShelfDate(completedAt: string) {
   });
 }
 
-function getTimeAwareGreeting() {
-  const hour = new Date().getHours();
-
-  if (hour < 12) return "Good morning";
-  if (hour < 17) return "Good afternoon";
-  if (hour >= 22) return "Good night";
-  return "Good evening";
-}
-
 function getValidBookTitle(title?: string | null) {
   const trimmedTitle = title?.trim() ?? "";
   return trimmedTitle.length > 0 ? trimmedTitle : null;
@@ -360,6 +376,21 @@ function getBookMetadataFields(
     isbn13: metadata.isbn13 ?? null,
     bookSource: metadata.source,
   };
+}
+
+function normalizeStoredCoverUrl(coverUrl?: string | null) {
+  return coverUrl?.replace(/^http:\/\//i, "https://") ?? null;
+}
+
+function normalizeBookMetadataFields<T extends BookMetadataFields>(item: T): T {
+  if (!item.coverUrl) {
+    return item;
+  }
+
+  const normalizedCoverUrl = normalizeStoredCoverUrl(item.coverUrl);
+  return normalizedCoverUrl === item.coverUrl
+    ? item
+    : { ...item, coverUrl: normalizedCoverUrl };
 }
 
 export default function HomeScreen() {
@@ -420,6 +451,7 @@ export default function HomeScreen() {
   const revealScale = useRef(new Animated.Value(0.96)).current;
   const revealTranslateY = useRef(new Animated.Value(18)).current;
   const revealSceneScale = useRef(new Animated.Value(0.98)).current;
+  const bookTitleInputRef = useRef<TextInput | null>(null);
   const bookLookupRequestId = useRef(0);
   const completedBookPromptIndex = useRef(
     Math.floor(Math.random() * completedBookReflectionPrompts.length),
@@ -843,12 +875,18 @@ export default function HomeScreen() {
           const parsedSessions: ReadingSession[] = JSON.parse(savedSessions);
           let shouldPersistMigratedSessions = false;
           const migratedSessions = parsedSessions.map((session) => {
+            const normalizedSession = normalizeBookMetadataFields(session);
+
             if (session.note && !session.reflection) {
               shouldPersistMigratedSessions = true;
-              return { ...session, reflection: session.note };
+              return { ...normalizedSession, reflection: session.note };
             }
 
-            return session;
+            if (normalizedSession !== session) {
+              shouldPersistMigratedSessions = true;
+            }
+
+            return normalizedSession;
           });
 
           setRecentSessions(migratedSessions);
@@ -872,13 +910,28 @@ export default function HomeScreen() {
         if (savedCompletedBooks !== null) {
           const parsedCompletedBooks: CompletedBookReview[] =
             JSON.parse(savedCompletedBooks);
+          const migratedCompletedBooks = parsedCompletedBooks.map(
+            normalizeBookMetadataFields,
+          );
+
           setCompletedBooks(
-            [...parsedCompletedBooks].sort(
+            [...migratedCompletedBooks].sort(
               (first, second) =>
                 new Date(second.completedAt).getTime() -
                 new Date(first.completedAt).getTime(),
             ),
           );
+
+          if (
+            migratedCompletedBooks.some(
+              (book, index) => book !== parsedCompletedBooks[index],
+            )
+          ) {
+            await AsyncStorage.setItem(
+              COMPLETED_BOOKS_KEY,
+              JSON.stringify(migratedCompletedBooks),
+            );
+          }
         }
 
         if (savedHasSeenWelcome !== "true" && savedActiveSessionStartTime === null) {
@@ -1069,9 +1122,45 @@ export default function HomeScreen() {
     }
   };
 
+  const clearBookTitleSelection = () => {
+    bookLookupRequestId.current += 1;
+    setBookTitle("");
+    setSelectedBookMetadata(null);
+    setBookLookupResults([]);
+    setIsBookLookupLoading(false);
+    setHasBookLookupSearched(false);
+    setBookLookupError(false);
+    setTimeout(() => bookTitleInputRef.current?.focus(), 0);
+  };
+
   const selectGoogleBook = (book: BookMetadata) => {
-    setSelectedBookMetadata(book);
+    setSelectedBookMetadata({
+      ...book,
+      coverUrl: normalizeStoredCoverUrl(book.coverUrl),
+    });
     setBookTitle(book.title);
+  };
+
+  const findKnownBookMetadataByTitle = (title: string): BookMetadata | null => {
+    const normalizedTitle = title.trim().toLowerCase();
+    const knownBook = [...recentSessions, ...completedBooks].find(
+      (book) =>
+        book.title.trim().toLowerCase() === normalizedTitle && book.coverUrl,
+    );
+
+    if (!knownBook) {
+      return null;
+    }
+
+    return {
+      title: knownBook.title,
+      author: knownBook.author ?? null,
+      coverUrl: normalizeStoredCoverUrl(knownBook.coverUrl),
+      googleBooksId: knownBook.googleBooksId ?? null,
+      isbn10: knownBook.isbn10 ?? null,
+      isbn13: knownBook.isbn13 ?? null,
+      source: knownBook.bookSource ?? "googleBooks",
+    };
   };
 
   const saveSession = async (
@@ -1146,6 +1235,7 @@ export default function HomeScreen() {
       sessionMinutes: sessionDuration,
       ctaText: revealCopy.ctaText,
       source: "timed",
+      ...metadataFields,
     });
 
     return {
@@ -1160,9 +1250,12 @@ export default function HomeScreen() {
     const titleToSave = validBookTitle || UNATTACHED_SESSION_TITLE;
     const shouldCompleteBook = showBookCompletedInput && Boolean(validBookTitle);
     const selectedMetadata =
-      validBookTitle && selectedBookMetadata?.title === validBookTitle
+      validBookTitle &&
+      selectedBookMetadata?.title.trim() === validBookTitle
         ? selectedBookMetadata
-        : null;
+        : validBookTitle
+          ? findKnownBookMetadataByTitle(validBookTitle)
+          : null;
     const completedBookMetadataFields = getBookMetadataFields(selectedMetadata);
 
     const savedSession = await saveSession(titleToSave, selectedMetadata);
@@ -1197,7 +1290,7 @@ export default function HomeScreen() {
     }
 
     if (validBookTitle) {
-      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} • ${validBookTitle}`);
+      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} - ${validBookTitle}`);
     } else {
       setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
     }
@@ -1397,7 +1490,7 @@ export default function HomeScreen() {
       ],
     ]);
 
-    setSessionMessage(`+${sessionDuration} • logged`);
+    setSessionMessage(`+${sessionDuration} - logged`);
 
     setTimeout(() => {
       setSessionMessage(null);
@@ -1443,17 +1536,24 @@ export default function HomeScreen() {
     .filter((session) => session.title !== UNATTACHED_SESSION_TITLE)
     .slice(0, 3);
   const latestSession = recentSessions[0];
-  const hasPlacedBook = Boolean(currentBookTitle || latestSession);
-const currentBookDisplayTitle =
-  currentBookTitle || (latestSession ? getDisplaySessionTitle(latestSession.title) : "Your next book");
+  const currentBookSession = currentBookTitle
+    ? recentSessions.find(
+        (session) =>
+          session.title.trim().toLowerCase() ===
+          currentBookTitle.trim().toLowerCase(),
+      )
+    : latestSession;
+  const currentBookCoverUrl = normalizeStoredCoverUrl(
+    currentBookSession?.coverUrl,
+  );
+  const currentBookDisplayTitle =
+    currentBookTitle ||
+    (latestSession ? getDisplaySessionTitle(latestSession.title) : "Your next book");
   const currentBookMeta = currentBookTitle
     ? latestSession?.title === currentBookTitle
-      ? `Last read ${formatSessionTimestamp(latestSession.createdAt)}`
+      ? `Last read ${formatCurrentBookTimestamp(latestSession.createdAt)}`
       : "Saved as your current book"
     : "Save a session to place a book here";
-  const readingPlaceContinuityCopy = hasPlacedBook
-    ? "Your book is waiting."
-    : "Your first book can live here.";
   const revealBookTitle = getDisplaySessionTitle(
     sanctuaryReveal?.bookTitle ||
       bookTitle.trim() ||
@@ -1464,7 +1564,6 @@ const currentBookDisplayTitle =
   );
   const isUnattachedReveal =
     sanctuaryReveal?.bookTitle === UNATTACHED_SESSION_TITLE;
-  const timeAwareGreeting = getTimeAwareGreeting();
   const diarySessions = [...recentSessions].sort(
     (first, second) => getSessionDateValue(second) - getSessionDateValue(first),
   );
@@ -1620,7 +1719,11 @@ const currentBookDisplayTitle =
         >
           <View style={styles.beaconMark}>
             <View style={styles.beaconBeam} />
-            <View style={styles.sessionQuietDot} />
+            <Ionicons
+              name="radio-button-on-outline"
+              size={18}
+              color="rgba(247,195,107,0.74)"
+            />
           </View>
           <View style={styles.ritualLineArea}>
             <Animated.View
@@ -1667,7 +1770,11 @@ const currentBookDisplayTitle =
           ]}
         >
           <View style={styles.activeBeaconBadge}>
-            <View style={styles.activeBeaconDot} />
+            <Ionicons
+              name="radio-button-on-outline"
+              size={18}
+              color="rgba(247,195,107,0.74)"
+            />
           </View>
           <ThemedText style={styles.quietSessionEyebrow}>
             Reading session
@@ -1712,6 +1819,11 @@ const currentBookDisplayTitle =
       const shouldShowBookLookup =
         bookLookupQueryIsReady &&
         (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
+      const selectedBookCoverUrl = normalizeStoredCoverUrl(
+        selectedBookMetadata?.coverUrl,
+      );
+      const attributionPreviewTitle =
+        selectedBookMetadata?.title || getValidBookTitle(bookTitle) || "R";
 
       return (
       <ThemedView
@@ -1737,24 +1849,67 @@ const currentBookDisplayTitle =
             What did you read?
           </ThemedText>
           <ThemedText style={styles.bookReturnMinutes}>
-            Your time was kept • {pendingDuration}
+            Your time was kept - {pendingDuration}
           </ThemedText>
 
           <View style={styles.bookAttributionCard}>
             <View style={styles.bookAttributionCover}>
-              <ThemedText style={styles.bookAttributionCoverText}>R</ThemedText>
+              {selectedBookCoverUrl ? (
+                <Image
+                  source={{ uri: selectedBookCoverUrl }}
+                  style={styles.bookAttributionCoverImage}
+                  resizeMode="cover"
+                />
+              ) : (
+                <ThemedText
+                  style={styles.bookAttributionCoverText}
+                  numberOfLines={1}
+                >
+                  {attributionPreviewTitle}
+                </ThemedText>
+              )}
             </View>
             <View style={styles.bookAttributionCopy}>
               <ThemedText style={styles.bookAttributionLabel}>Save this session to</ThemedText>
-              <TextInput
-                placeholder="Book title"
-                placeholderTextColor="rgba(31,41,51,0.38)"
-                value={bookTitle}
-                onChangeText={handleBookTitleChange}
-                style={styles.bookAttributionInput}
-                returnKeyType="done"
-                onSubmitEditing={saveBookForSession}
-              />
+              <View style={styles.bookAttributionInputRow}>
+                <TextInput
+                  ref={bookTitleInputRef}
+                  placeholder="Book title"
+                  placeholderTextColor="rgba(31,41,51,0.38)"
+                  value={bookTitle}
+                  onChangeText={handleBookTitleChange}
+                  style={styles.bookAttributionInput}
+                  returnKeyType="done"
+                  blurOnSubmit
+                  onSubmitEditing={Keyboard.dismiss}
+                />
+                {bookTitle.trim().length > 0 ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Clear book title"
+                    hitSlop={8}
+                    style={({ pressed }) => [
+                      styles.bookAttributionClearButton,
+                      pressed && styles.buttonPressed,
+                    ]}
+                    onPress={clearBookTitleSelection}
+                  >
+                    <Ionicons
+                      name="close-circle-outline"
+                      size={22}
+                      color="rgba(47,93,80,0.48)"
+                    />
+                  </Pressable>
+                ) : null}
+              </View>
+              {selectedBookMetadata ? (
+                <ThemedText
+                  style={styles.bookAttributionSelectedText}
+                  numberOfLines={1}
+                >
+                  Selected from Google Books
+                </ThemedText>
+              ) : null}
             </View>
           </View>
 
@@ -1770,6 +1925,11 @@ const currentBookDisplayTitle =
                   </ThemedText>
                 ) : null}
               </View>
+              {bookLookupResults.length > 0 ? (
+                <ThemedText style={styles.bookLookupHelperText}>
+                  Choose the edition you read, or keep your typed title.
+                </ThemedText>
+              ) : null}
 
               {bookLookupResults.map((book) => {
                 const isSelected =
@@ -1798,12 +1958,19 @@ const currentBookDisplayTitle =
                       </View>
                     )}
                     <View style={styles.bookLookupCopy}>
-                      <ThemedText
-                        style={styles.bookLookupBookTitle}
-                        numberOfLines={1}
-                      >
-                        {book.title}
-                      </ThemedText>
+                      <View style={styles.bookLookupTitleRow}>
+                        <ThemedText
+                          style={styles.bookLookupBookTitle}
+                          numberOfLines={1}
+                        >
+                          {book.title}
+                        </ThemedText>
+                        {isSelected ? (
+                          <ThemedText style={styles.bookLookupSelectedLabel}>
+                            Selected
+                          </ThemedText>
+                        ) : null}
+                      </View>
                       {book.author ? (
                         <ThemedText
                           style={styles.bookLookupBookAuthor}
@@ -1822,7 +1989,7 @@ const currentBookDisplayTitle =
               bookLookupResults.length === 0 ? (
                 <ThemedText style={styles.bookLookupEmptyText}>
                   {bookLookupError
-                    ? "Couldn’t check matches right now. You can still save this title."
+                    ? "Couldn't check matches right now. You can still save this title."
                     : "No matches found. You can still save this title."}
                 </ThemedText>
               ) : null}
@@ -1848,14 +2015,24 @@ const currentBookDisplayTitle =
                   onPress={() => handleBookTitleChange(session.title)}
                 >
                   <View style={styles.recentBookMiniCover}>
-                    <ThemedText style={styles.recentBookMiniCoverText}>R</ThemedText>
+                    {session.coverUrl ? (
+                      <Image
+                        source={{
+                          uri: normalizeStoredCoverUrl(session.coverUrl) ?? "",
+                        }}
+                        style={styles.recentBookMiniCoverImage}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <ThemedText style={styles.recentBookMiniCoverText}>R</ThemedText>
+                    )}
                   </View>
                   <View style={styles.recentBookChoiceCopy}>
                     <ThemedText style={styles.recentBookChoiceTitle} numberOfLines={1}>
                       {getDisplaySessionTitle(session.title)}
                     </ThemedText>
                     <ThemedText style={styles.recentBookChoiceMeta}>
-                      Last saved • {formatDuration(Number(session.minutes))}
+                      Last saved - {formatDuration(Number(session.minutes))}
                     </ThemedText>
                   </View>
                 </Pressable>
@@ -1884,7 +2061,7 @@ const currentBookDisplayTitle =
                   Finished this book?
                 </ThemedText>
                 <ThemedText style={styles.bookCompletedSubtext}>
-                  Mark it complete — a quiet moment awaits.
+                  Mark it complete - a quiet moment awaits.
                 </ThemedText>
               </View>
               <View
@@ -2151,13 +2328,23 @@ const currentBookDisplayTitle =
               />
             ))}
             <View style={styles.completedBookCover}>
-              <ThemedText
-                style={styles.completedBookCoverTitle}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
-                {completedBookMoment.title}
-              </ThemedText>
+              {completedBookMoment.coverUrl ? (
+                <Image
+                  source={{
+                    uri: normalizeStoredCoverUrl(completedBookMoment.coverUrl) ?? "",
+                  }}
+                  style={styles.completedBookCoverImage}
+                  resizeMode="cover"
+                />
+              ) : (
+                <ThemedText
+                  style={styles.completedBookCoverTitle}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {completedBookMoment.title}
+                </ThemedText>
+              )}
             </View>
           </View>
 
@@ -2206,7 +2393,7 @@ const currentBookDisplayTitle =
               {reflectionPrompt}
             </ThemedText>
             <TextInput
-              placeholder="A thought, a line, a feeling…"
+              placeholder="A thought, a line, a feeling..."
               placeholderTextColor="rgba(240,235,224,0.3)"
               value={completedBookReview}
               onChangeText={setCompletedBookReview}
@@ -2292,11 +2479,12 @@ const currentBookDisplayTitle =
             ]}
           >
           <ScrollView
+            style={styles.bookRevealScrollView}
             keyboardShouldPersistTaps="handled"
             keyboardDismissMode="interactive"
             contentContainerStyle={[
               styles.bookRevealContent,
-              { paddingBottom: insets.bottom + 96 },
+              { paddingBottom: insets.bottom + 240 },
             ]}
           >
             <ThemedText style={styles.bookRevealEyebrow}>Session saved</ThemedText>
@@ -2311,13 +2499,23 @@ const currentBookDisplayTitle =
               ]}
             >
               <View style={styles.bookRevealCover}>
-                <ThemedText
-                  style={styles.bookRevealCoverTitle}
-                  numberOfLines={1}
-                  ellipsizeMode="tail"
-                >
-                  {revealBookTitle}
-                </ThemedText>
+                {sanctuaryReveal.coverUrl ? (
+                  <Image
+                    source={{
+                      uri: normalizeStoredCoverUrl(sanctuaryReveal.coverUrl) ?? "",
+                    }}
+                    style={styles.bookRevealCoverImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <ThemedText
+                    style={styles.bookRevealCoverTitle}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {revealBookTitle}
+                  </ThemedText>
+                )}
               </View>
               <View style={styles.bookRevealTextBlock}>
                 <ThemedText style={styles.bookRevealLabel}>Saved to your reading place</ThemedText>
@@ -2341,7 +2539,7 @@ const currentBookDisplayTitle =
                   {"A note, if you'd like one."}
                 </ThemedText>
                 <TextInput
-                  placeholder="A thought, a line, a feeling…"
+                  placeholder="A thought, a line, a feeling..."
                   placeholderTextColor="rgba(47,93,80,0.42)"
                   value={sessionReflection}
                   onChangeText={setSessionReflection}
@@ -2367,7 +2565,13 @@ const currentBookDisplayTitle =
                 {sanctuaryReveal.subtitle}
               </ThemedText>
             </View>
-
+          </ScrollView>
+          <View
+            style={[
+              styles.bookRevealFooter,
+              { paddingBottom: Math.max(insets.bottom + 12, 24) },
+            ]}
+          >
             <Pressable
               style={({ pressed }) => [
                 styles.bookRevealContinueButton,
@@ -2397,7 +2601,7 @@ const currentBookDisplayTitle =
                 </ThemedText>
               </Pressable>
             )}
-          </ScrollView>
+          </View>
         </Animated.View>
         </KeyboardAvoidingView>
       </ThemedView>
@@ -2469,12 +2673,30 @@ const currentBookDisplayTitle =
 
                       <View style={styles.diaryEntryCard}>
                         <View style={styles.diaryEntryTopRow}>
+                          <View style={styles.diaryEntryCover}>
+                            {session.coverUrl ? (
+                              <Image
+                                source={{
+                                  uri: normalizeStoredCoverUrl(session.coverUrl) ?? "",
+                                }}
+                                style={styles.diaryEntryCoverImage}
+                                resizeMode="cover"
+                              />
+                            ) : (
+                              <ThemedText
+                                style={styles.diaryEntryCoverText}
+                                numberOfLines={1}
+                              >
+                                {getDisplaySessionTitle(session.title)}
+                              </ThemedText>
+                            )}
+                          </View>
                           <View style={styles.diaryEntryCopy}>
                             <ThemedText style={styles.diaryBookTitle}>
                               {getDisplaySessionTitle(session.title)}
                             </ThemedText>
                             <ThemedText style={styles.diaryMeta}>
-                              {session.source === "logged" ? "Logged" : "Timed"} •{" "}
+                              {session.source === "logged" ? "Logged" : "Timed"}{" - "}
                               {formatSessionTimestamp(
                                 session.createdAt,
                                 legacyDate,
@@ -2551,13 +2773,23 @@ const currentBookDisplayTitle =
                           index % 2 === 1 && styles.finishedBookCoverAlt,
                         ]}
                       >
-                        <ThemedText
-                          style={styles.finishedBookCoverTitle}
-                          numberOfLines={1}
-                          ellipsizeMode="tail"
-                        >
-                          {book.title}
-                        </ThemedText>
+                        {book.coverUrl ? (
+                          <Image
+                            source={{
+                              uri: normalizeStoredCoverUrl(book.coverUrl) ?? "",
+                            }}
+                            style={styles.finishedBookCoverImage}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <ThemedText
+                            style={styles.finishedBookCoverTitle}
+                            numberOfLines={1}
+                            ellipsizeMode="tail"
+                          >
+                            {book.title}
+                          </ThemedText>
+                        )}
                       </View>
 
                       <View style={styles.finishedBookCopy}>
@@ -2573,7 +2805,7 @@ const currentBookDisplayTitle =
                           </ThemedText>
                         </View>
                         <ThemedText style={styles.finishedBookMeta}>
-                          {formatDuration(Number(book.totalBookMinutes ?? book.sessionMinutes))} ·{" "}
+                          {formatDuration(Number(book.totalBookMinutes ?? book.sessionMinutes))}{" - "}
                           {book.sessionCount ?? 1}{" "}
                           {(book.sessionCount ?? 1) === 1 ? "session" : "sessions"}
                         </ThemedText>
@@ -2651,67 +2883,72 @@ const currentBookDisplayTitle =
         </View>
 
         <ThemedView style={styles.headerRow}>
-          <View>
+          <View style={styles.headerCopy}>
             <ThemedText style={styles.appName}>Rousd</ThemedText>
             <ThemedText style={styles.headerSubtitle}>
               Keep a light on for your reading life.
             </ThemedText>
           </View>
+          <Pressable
+            style={({ pressed }) => [
+              styles.menuButton,
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={() => setScreen("diary")}
+          >
+            <Ionicons
+              name="ellipsis-vertical"
+              size={18}
+              color="rgba(47,93,80,0.62)"
+            />
+            <ThemedText style={styles.menuButtonText}>Menu</ThemedText>
+          </Pressable>
         </ThemedView>
 
         <View style={styles.bookShrineHero}>
           <View pointerEvents="none" style={styles.bookShrineWarmGlow} />
-          <View pointerEvents="none" style={styles.bookShrinePlantLeft}>
-            <View style={styles.bookShrineStem} />
-            <View style={[styles.bookShrineLeaf, styles.bookShrineLeafOne]} />
-            <View style={[styles.bookShrineLeaf, styles.bookShrineLeafTwo]} />
-          </View>
 
           <View style={styles.bookShrineTopRow}>
             <View style={styles.bookShrineIconPill}>
-              <ThemedText style={styles.bookShrineIcon}>✦</ThemedText>
+              <Ionicons
+                name="book-outline"
+                size={13}
+                color="rgba(47,93,80,0.62)"
+              />
             </View>
             <ThemedText style={styles.bookShrineStage}>
-              Reading place
+              Currently reading
             </ThemedText>
           </View>
 
-          <ThemedText style={styles.bookShrineGreeting}>
-            {timeAwareGreeting}
-          </ThemedText>
-          <ThemedText style={styles.bookShrineSubcopy}>
-            Your place is here.
-          </ThemedText>
-
-          <View style={styles.bookShrineShelf}>
+          <View style={styles.bookShrinePanel}>
             <View style={styles.bookShrineCover}>
-              <ThemedText
-                style={styles.bookShrineCoverTitle}
-                numberOfLines={1}
-                ellipsizeMode="tail"
-              >
+              {currentBookCoverUrl ? (
+                <Image
+                  source={{ uri: currentBookCoverUrl }}
+                  style={styles.bookShrineCoverImage}
+                  resizeMode="cover"
+                />
+              ) : (
+                <ThemedText
+                  style={styles.bookShrineCoverTitle}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {currentBookDisplayTitle}
+                </ThemedText>
+              )}
+            </View>
+
+            <View style={styles.bookShrineCopy}>
+              <ThemedText style={styles.bookShrineBookTitle} numberOfLines={2}>
                 {currentBookDisplayTitle}
               </ThemedText>
-            </View>
-            <View style={styles.bookShrineLantern}>
-              <View style={styles.bookShrineLanternGlow} />
-              <View style={styles.bookShrineLanternTop} />
-              <View style={styles.bookShrineLanternBody} />
-              <View style={styles.bookShrineLanternBase} />
-            </View>
-          </View>
-
-          <View style={styles.bookShrineInfoCard}>
-            <ThemedText style={styles.bookShrineBookTitle} numberOfLines={2}>
-              {currentBookDisplayTitle}
-            </ThemedText>
-            <ThemedText style={styles.bookShrineBookMeta}>
-              {currentBookMeta}
-            </ThemedText>
-            <View style={styles.bookShrineContinuityRow}>
-              <View style={styles.bookShrineContinuityDot} />
-              <ThemedText style={styles.bookShrineContinuityText}>
-                {readingPlaceContinuityCopy}
+              <ThemedText style={styles.bookShrineSubcopy}>
+                Your place is here.
+              </ThemedText>
+              <ThemedText style={styles.bookShrineBookMeta}>
+                {currentBookMeta}
               </ThemedText>
             </View>
           </View>
@@ -2725,7 +2962,11 @@ const currentBookDisplayTitle =
           onPress={handlePress}
         >
           <View style={styles.startHeroContent}>
-            <ThemedText style={styles.startHeroIcon}>R</ThemedText>
+            <Ionicons
+              name="book-outline"
+              size={22}
+              color="rgba(255,255,255,0.88)"
+            />
             <View style={styles.startHeroCopy}>
               <ThemedText
                 style={styles.startHeroTitle}
@@ -2733,29 +2974,80 @@ const currentBookDisplayTitle =
                 adjustsFontSizeToFit
                 minimumFontScale={0.88}
               >
-                Start Reading
+                Start reading
               </ThemedText>
             </View>
             <View style={styles.startHeroArrowCircle}>
-              <ThemedText style={styles.startHeroArrow}>✦</ThemedText>
+              <Ionicons
+                name="arrow-forward"
+                size={19}
+                color="rgba(255,255,255,0.9)"
+              />
             </View>
           </View>
         </Pressable>
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.manualLogButton,
-            pressed && styles.buttonPressed,
-          ]}
-          onPress={openManualLog}
-        >
-          <View style={styles.manualLogButtonContent}>
-            <ThemedText style={styles.manualLogButtonText}>
-              Add a reading moment
-            </ThemedText>
-            <ThemedText style={styles.manualLogChevron}>✦</ThemedText>
-          </View>
-        </Pressable>
+        <View style={styles.homeShortcutStack}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.homeShortcutCard,
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={() => setScreen("diary")}
+          >
+            <View style={styles.homeShortcutTopRow}>
+              <View style={styles.homeShortcutIconCircle}>
+                <Ionicons
+                  name="book-outline"
+                  size={18}
+                  color="rgba(47,93,80,0.72)"
+                />
+              </View>
+              <Ionicons
+                name="chevron-forward"
+                size={16}
+                color="rgba(47,93,80,0.34)"
+              />
+            </View>
+            <View style={styles.homeShortcutCopy}>
+              <ThemedText style={styles.homeShortcutTitle}>Diary</ThemedText>
+              <ThemedText style={styles.homeShortcutSubtext}>
+                Your private reading journal
+              </ThemedText>
+            </View>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.homeShortcutCard,
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={() => setScreen("finishedBooks")}
+          >
+            <View style={styles.homeShortcutTopRow}>
+              <View style={styles.homeShortcutIconCircle}>
+                <Ionicons
+                  name="library-outline"
+                  size={18}
+                  color="rgba(47,93,80,0.72)"
+                />
+              </View>
+              <Ionicons
+                name="chevron-forward"
+                size={16}
+                color="rgba(47,93,80,0.34)"
+              />
+            </View>
+            <View style={styles.homeShortcutCopy}>
+              <ThemedText style={styles.homeShortcutTitle}>
+                Finished Books
+              </ThemedText>
+              <ThemedText style={styles.homeShortcutSubtext}>
+                Your quiet shelf
+              </ThemedText>
+            </View>
+          </Pressable>
+        </View>
 
         {sessionMessage && (
           <ThemedView style={styles.sessionToast}>
@@ -2767,6 +3059,19 @@ const currentBookDisplayTitle =
 
         <View style={styles.sessionsHeaderRow}>
           <ThemedText style={styles.sessionsTitle}>Recent sessions</ThemedText>
+          {recentSessions.length > 0 ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.sessionsViewAllButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => setScreen("diary")}
+            >
+              <ThemedText style={styles.sessionsViewAllText}>
+                View all
+              </ThemedText>
+            </Pressable>
+          ) : null}
         </View>
 
         <ThemedView style={styles.sessionsCard}>
@@ -2775,33 +3080,30 @@ const currentBookDisplayTitle =
               {"Your first session will appear here. Start reading when you're ready."}
             </ThemedText>
           ) : (
-            visibleSessions.map((session, index) => {
-              const sessionReflection = getSessionNote(session);
-
+            visibleSessions.slice(0, 1).map((session, index) => {
               return (
                 <View
                   key={session.id}
                   style={[
                     styles.sessionRow,
-                    index === visibleSessions.length - 1 && styles.lastSessionRow,
+                    index === 0 && styles.lastSessionRow,
                   ]}
                 >
                   <View style={styles.sessionIconCircle}>
-                    <View style={styles.sessionRowDot} />
+                    <Ionicons
+                      name="time-outline"
+                      size={16}
+                      color="rgba(47,93,80,0.58)"
+                    />
                   </View>
 
                   <View style={styles.sessionTextContainer}>
-                    <ThemedText style={styles.sessionBookTitle}>
+                    <ThemedText style={styles.sessionBookTitle} numberOfLines={1}>
                       {getDisplaySessionTitle(session.title)}
                     </ThemedText>
-                    <ThemedText style={styles.sessionDate}>
-                      {session.source === "logged" ? "Manually Logged" : "Timed"} • {formatSessionTimestamp(session.createdAt)}
+                    <ThemedText style={styles.sessionDate} numberOfLines={1}>
+                      {session.source === "logged" ? "Logged" : "Timed"} - {formatSessionTimestamp(session.createdAt)}
                     </ThemedText>
-                    {sessionReflection ? (
-                      <ThemedText style={styles.sessionNote} numberOfLines={2}>
-                        {sessionReflection}
-                      </ThemedText>
-                    ) : null}
                   </View>
 
                   <ThemedText style={styles.sessionMinutes}>
@@ -2815,53 +3117,20 @@ const currentBookDisplayTitle =
 
         <Pressable
           style={({ pressed }) => [
-            styles.diaryOpenButton,
+            styles.manualLogButton,
             pressed && styles.buttonPressed,
           ]}
-          onPress={() => setScreen("diary")}
+          onPress={openManualLog}
         >
-          <ThemedText style={styles.diaryOpenButtonText}>
-            Open diary
-          </ThemedText>
-          <ThemedText style={styles.diaryOpenButtonSubtext}>
-            Read the full private record.
-          </ThemedText>
-        </Pressable>
-
-        <Pressable
-          style={({ pressed }) => [
-            styles.finishedBooksHomeButton,
-            pressed && styles.buttonPressed,
-          ]}
-          onPress={() => setScreen("finishedBooks")}
-        >
-          <View style={styles.finishedBooksHomeCovers}>
-            {completedBooks.length === 0 ? (
-              <View
-                style={[
-                  styles.finishedBooksHomeCover,
-                  styles.finishedBooksHomeCoverAlt,
-                ]}
-              />
-            ) : (
-              completedBooks.slice(0, 3).map((book, index) => (
-                <View
-                  key={book.id}
-                  style={[
-                    styles.finishedBooksHomeCover,
-                    index % 2 === 1 && styles.finishedBooksHomeCoverAlt,
-                  ]}
-                />
-              ))
-            )}
-          </View>
-          <View style={styles.finishedBooksHomeCopy}>
-            <ThemedText style={styles.finishedBooksHomeTitle}>
-              Finished books
+          <View style={styles.manualLogButtonContent}>
+            <ThemedText style={styles.manualLogButtonText}>
+              Add a reading moment
             </ThemedText>
-            <ThemedText style={styles.finishedBooksHomeSubtext}>
-              Revisit the books you have closed.
-            </ThemedText>
+            <Ionicons
+              name="chevron-forward"
+              size={18}
+              color="rgba(36,72,62,0.44)"
+            />
           </View>
         </Pressable>
 
@@ -2898,10 +3167,10 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     position: "relative",
-    paddingHorizontal: 26,
+    paddingHorizontal: 22,
     paddingTop: 46,
     paddingBottom: 54,
-    gap: 16,
+    gap: 12,
     backgroundColor: colors.background,
     overflow: "hidden",
   },
@@ -2929,7 +3198,7 @@ const styles = StyleSheet.create({
     left: -44,
     right: -44,
     height: 118,
-    opacity: 0.14,
+    opacity: 0.035,
     alignItems: "center",
     justifyContent: "flex-end",
     zIndex: 0,
@@ -2945,6 +3214,7 @@ const styles = StyleSheet.create({
     transform: [{ rotate: "45deg" }, { scaleY: 0.72 }],
   },
   mountainFarCenter: {
+    display: "none",
     position: "absolute",
     bottom: -70,
     width: 255,
@@ -3257,13 +3527,40 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   headerRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 14,
     backgroundColor: "transparent",
-    marginBottom: 4,
+    marginBottom: 0,
     zIndex: 2,
   },
+  headerCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  menuButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: "rgba(255,248,237,0.62)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    marginTop: 4,
+  },
+  menuButtonText: {
+    color: "rgba(47,93,80,0.68)",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "600",
+  },
   appName: {
-    fontSize: 48,
-    lineHeight: 54,
+    fontSize: 43,
+    lineHeight: 48,
     fontWeight: "400",
     color: "#1B2A22",
     letterSpacing: -1.9,
@@ -3274,11 +3571,11 @@ const styles = StyleSheet.create({
     }),
   },
   headerSubtitle: {
-    fontSize: 15,
-    lineHeight: 22,
+    fontSize: 14,
+    lineHeight: 20,
     color: colors.mutedText,
     fontWeight: "600",
-    marginTop: 6,
+    marginTop: 3,
   },
   sanctuaryHeroScene: {
     height: 186,
@@ -3738,17 +4035,17 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   startHero: {
-    minHeight: 64,
-    marginTop: 2,
+    minHeight: 72,
+    marginTop: 0,
     backgroundColor: "#1F4F3B",
-    borderRadius: 28,
+    borderRadius: 30,
     paddingHorizontal: 22,
     justifyContent: "center",
     shadowColor: "#315F52",
-    shadowOffset: { width: 0, height: 7 },
-    shadowOpacity: 0.10,
-    shadowRadius: 15,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.07,
+    shadowRadius: 10,
+    elevation: 3,
     zIndex: 3,
   },
   startHeroContent: {
@@ -3756,12 +4053,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 14,
     backgroundColor: "transparent",
-  },
-  startHeroIcon: {
-    color: "rgba(255,255,255,0.88)",
-    fontSize: 25,
-    lineHeight: 28,
-    fontWeight: "700",
   },
   startHeroCopy: {
     flex: 1,
@@ -3772,7 +4063,7 @@ const styles = StyleSheet.create({
     fontSize: 21,
     lineHeight: 28,
     fontWeight: "700",
-    letterSpacing: -0.25,
+    letterSpacing: 0,
     flexShrink: 1,
   },
   startHeroArrowCircle: {
@@ -3782,12 +4073,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(255,255,255,0.13)",
-  },
-  startHeroArrow: {
-    color: "rgba(255,255,255,0.9)",
-    fontSize: 22,
-    lineHeight: 26,
-    fontWeight: "600",
   },
   manualLogButton: {
     backgroundColor: "rgba(255,255,255,0.46)",
@@ -3901,6 +4186,56 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     textAlign: "center",
   },
+  homeShortcutStack: {
+    flexDirection: "row",
+    gap: 10,
+    backgroundColor: "transparent",
+    zIndex: 3,
+  },
+  homeShortcutCard: {
+    flex: 1,
+    minHeight: 100,
+    justifyContent: "space-between",
+    gap: 10,
+    backgroundColor: "rgba(255,248,237,0.74)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    borderRadius: 18,
+    paddingVertical: 11,
+    paddingHorizontal: 13,
+  },
+  homeShortcutTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "transparent",
+  },
+  homeShortcutIconCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(47,93,80,0.08)",
+  },
+  homeShortcutCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  homeShortcutTitle: {
+    color: colors.accentDark,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: "500",
+  },
+  homeShortcutSubtext: {
+    color: "rgba(31,41,51,0.52)",
+    fontSize: 11,
+    lineHeight: 15,
+    fontWeight: "400",
+    marginTop: 3,
+  },
   bookInputLabel: {
     fontSize: 17,
     lineHeight: 24,
@@ -3933,23 +4268,32 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: "transparent",
-    marginTop: 6,
-    marginBottom: -4,
+    marginTop: 4,
+    marginBottom: -2,
     zIndex: 2,
   },
+  sessionsViewAllButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 2,
+  },
+  sessionsViewAllText: {
+    color: "rgba(47,93,80,0.58)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "600",
+  },
   sessionsTitle: {
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: "800",
-    color: "rgba(31,41,51,0.78)",
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "600",
+    color: "rgba(31,41,51,0.58)",
   },
   sessionsCard: {
-    backgroundColor: "rgba(255,255,255,0.68)",
-    borderRadius: 22,
+    backgroundColor: "rgba(255,255,255,0.44)",
+    borderRadius: 18,
     overflow: "hidden",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
-    ...softCardShadow,
   },
   emptySessionsText: {
     color: colors.mutedText,
@@ -3961,23 +4305,23 @@ const styles = StyleSheet.create({
   sessionRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 16,
-    paddingHorizontal: 18,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
     borderBottomWidth: 1,
-    borderBottomColor: "#ECECEC",
-    backgroundColor: colors.card,
+    borderBottomColor: "rgba(47,93,80,0.06)",
+    backgroundColor: "rgba(255,255,255,0.50)",
   },
   lastSessionRow: {
     borderBottomWidth: 0,
   },
   sessionIconCircle: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.softAccent,
-    marginRight: 14,
+    marginRight: 10,
   },
   sessionRowDot: {
     width: 8,
@@ -3991,30 +4335,30 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
   },
   sessionBookTitle: {
-    fontSize: 16,
-    lineHeight: 22,
-    fontWeight: "800",
-    color: colors.text,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: "500",
+    color: "rgba(31,41,51,0.82)",
   },
   sessionDate: {
-    fontSize: 13,
-    lineHeight: 18,
-    color: colors.mutedText,
-    marginTop: 3,
-    fontWeight: "600",
+    fontSize: 11,
+    lineHeight: 16,
+    color: "rgba(107,114,128,0.78)",
+    marginTop: 2,
+    fontWeight: "500",
   },
   sessionNote: {
     color: "rgba(107,114,128,0.78)",
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: "600",
+    fontWeight: "500",
     marginTop: 5,
   },
   sessionMinutes: {
-    fontSize: 16,
-    lineHeight: 22,
-    fontWeight: "900",
-    color: colors.accent,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
+    color: "rgba(47,93,80,0.66)",
   },
   diaryOpenButton: {
     backgroundColor: "rgba(255,248,237,0.70)",
@@ -4133,6 +4477,28 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     gap: 14,
     backgroundColor: "transparent",
+  },
+  diaryEntryCover: {
+    width: 38,
+    height: 54,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    backgroundColor: colors.sessionBackground,
+  },
+  diaryEntryCoverImage: {
+    width: "100%",
+    height: "100%",
+  },
+  diaryEntryCoverText: {
+    width: "100%",
+    color: "#F7F3EA",
+    fontSize: 7,
+    lineHeight: 9,
+    fontWeight: "700",
+    textAlign: "center",
+    paddingHorizontal: 4,
   },
   diaryEntryCopy: {
     flex: 1,
@@ -4298,9 +4664,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: 6,
+    overflow: "hidden",
   },
   finishedBookCoverAlt: {
     backgroundColor: "#1E3A2C",
+  },
+  finishedBookCoverImage: {
+    width: 48,
+    height: 67,
+    margin: -6,
   },
   finishedBookCoverTitle: {
     color: "#F0EBE0",
@@ -4493,17 +4865,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "transparent",
     paddingBottom: 10,
-  },
-  sessionQuietDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: "rgba(247,195,107,0.72)",
-    shadowColor: "#F7C36B",
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.34,
-    shadowRadius: 10,
-    elevation: 2,
   },
   sessionTitle: {
     color: "#FFF8ED",
@@ -5049,30 +5410,35 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,248,237,0.94)",
     borderRadius: 28,
     padding: 22,
-    marginBottom: 16,
+    marginBottom: 34,
   },
   revealStageLabel: {
     color: colors.accentDark,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "900",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "700",
     letterSpacing: 1.1,
     textTransform: "uppercase",
     marginBottom: 8,
   },
   revealMainCopy: {
     color: colors.text,
-    fontSize: 24,
-    lineHeight: 30,
-    fontWeight: "900",
-    letterSpacing: -0.4,
+    fontSize: 25,
+    lineHeight: 32,
+    fontWeight: "400",
+    letterSpacing: 0,
     marginBottom: 8,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
   },
   revealSubCopy: {
     color: colors.mutedText,
     fontSize: 15,
     lineHeight: 22,
-    fontWeight: "600",
+    fontWeight: "500",
   },
   sessionReflectionWrap: {
     backgroundColor: "transparent",
@@ -5127,124 +5493,69 @@ const styles = StyleSheet.create({
   },
 
   bookShrineHero: {
-    borderRadius: 36,
+    borderRadius: 28,
     overflow: "hidden",
-    backgroundColor: "rgba(255,248,237,0.76)",
+    backgroundColor: "rgba(255,248,237,0.82)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.09)",
-    paddingTop: 22,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
+    paddingTop: 17,
+    paddingHorizontal: 18,
+    paddingBottom: 21,
     zIndex: 2,
     ...softCardShadow,
   },
   bookShrineWarmGlow: {
     position: "absolute",
-    top: 90,
-    left: -40,
-    right: -40,
-    height: 240,
-    borderRadius: 140,
-    backgroundColor: "rgba(247,195,107,0.16)",
-  },
-  bookShrinePlantLeft: {
-    position: "absolute",
-    left: 14,
-    bottom: 102,
-    width: 54,
-    height: 116,
-    backgroundColor: "transparent",
-  },
-  bookShrineStem: {
-    position: "absolute",
-    left: 25,
-    bottom: 0,
-    width: 2,
-    height: 84,
-    borderRadius: 1,
-    backgroundColor: "rgba(47,93,80,0.28)",
-  },
-  bookShrineLeaf: {
-    position: "absolute",
-    width: 28,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: "rgba(47,93,80,0.18)",
-  },
-  bookShrineLeafOne: {
-    left: 3,
-    bottom: 36,
-    transform: [{ rotate: "-28deg" }],
-  },
-  bookShrineLeafTwo: {
-    right: 0,
-    bottom: 58,
-    transform: [{ rotate: "26deg" }],
+    top: 42,
+    left: -56,
+    right: -38,
+    height: 196,
+    borderRadius: 116,
+    backgroundColor: "rgba(247,195,107,0.20)",
   },
   bookShrineTopRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
+    gap: 7,
     backgroundColor: "transparent",
-    marginBottom: 14,
+    marginBottom: 12,
   },
   bookShrineIconPill: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(47,93,80,0.08)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
   },
-  bookShrineIcon: {
-    color: colors.accent,
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "900",
-  },
   bookShrineStage: {
     color: "rgba(47,93,80,0.58)",
-    fontSize: 11,
-    lineHeight: 16,
-    fontWeight: "900",
-    letterSpacing: 1.3,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: "700",
+    letterSpacing: 1.1,
     textTransform: "uppercase",
-  },
-  bookShrineGreeting: {
-    color: "#1B2A22",
-    fontSize: 30,
-    lineHeight: 36,
-    textAlign: "center",
-    fontWeight: "400",
-    letterSpacing: -0.8,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
   },
   bookShrineSubcopy: {
     color: "rgba(31,41,51,0.62)",
-    fontSize: 15,
-    lineHeight: 21,
-    fontWeight: "600",
-    textAlign: "center",
-    marginTop: 5,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: "500",
+    marginTop: 6,
   },
-  bookShrineShelf: {
-    height: 176,
+  bookShrinePanel: {
+    minHeight: 214,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 15,
     backgroundColor: "transparent",
-    marginTop: 20,
   },
   bookShrineCover: {
-    width: 122,
-    height: 164,
-    borderRadius: 12,
+    width: 140,
+    height: 188,
+    borderRadius: 14,
     backgroundColor: "#1E3E32",
     borderWidth: 1,
     borderColor: "rgba(255,248,237,0.36)",
@@ -5256,13 +5567,20 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.16,
     shadowRadius: 20,
-    elevation: 6,
+    elevation: 5,
+    overflow: "hidden",
+  },
+  bookShrineCoverImage: {
+    width: 140,
+    height: 188,
+    marginHorizontal: -9,
+    marginVertical: -12,
   },
   bookShrineCoverTitle: {
     color: "#F7F3EA",
     width: "100%",
-    fontSize: 16,
-    lineHeight: 22,
+    fontSize: 14,
+    lineHeight: 18,
     fontWeight: "400",
     letterSpacing: 0.8,
     textTransform: "uppercase",
@@ -5273,88 +5591,30 @@ const styles = StyleSheet.create({
       default: "serif",
     }),
   },
-  bookShrineLantern: {
-    position: "absolute",
-    right: 34,
-    bottom: 10,
-    width: 48,
-    height: 76,
-    alignItems: "center",
-    justifyContent: "flex-end",
+  bookShrineCopy: {
+    flex: 1,
+    minWidth: 0,
+    paddingRight: 0,
     backgroundColor: "transparent",
-  },
-  bookShrineLanternGlow: {
-    position: "absolute",
-    bottom: 5,
-    width: 76,
-    height: 76,
-    borderRadius: 38,
-    backgroundColor: "rgba(247,195,107,0.36)",
-  },
-  bookShrineLanternTop: {
-    width: 20,
-    height: 10,
-    borderRadius: 8,
-    backgroundColor: "rgba(123,82,48,0.75)",
-    marginBottom: 1,
-  },
-  bookShrineLanternBody: {
-    width: 34,
-    height: 42,
-    borderRadius: 13,
-    borderWidth: 2,
-    borderColor: "rgba(123,82,48,0.74)",
-    backgroundColor: "rgba(247,195,107,0.28)",
-  },
-  bookShrineLanternBase: {
-    width: 40,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: "rgba(123,82,48,0.72)",
-    marginTop: -2,
-  },
-  bookShrineInfoCard: {
-    backgroundColor: "rgba(255,255,255,0.46)",
-    borderRadius: 26,
-    paddingVertical: 15,
-    paddingHorizontal: 18,
   },
   bookShrineBookTitle: {
     color: colors.text,
-    fontSize: 20,
-    lineHeight: 26,
-    fontWeight: "800",
-    textAlign: "center",
-    letterSpacing: -0.3,
+    fontSize: 17,
+    lineHeight: 22,
+    fontWeight: "400",
+    letterSpacing: 0,
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
   },
   bookShrineBookMeta: {
     color: "rgba(31,41,51,0.55)",
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "600",
-    textAlign: "center",
-    marginTop: 5,
-  },
-  bookShrineContinuityRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 7,
-    backgroundColor: "transparent",
-    marginTop: 10,
-  },
-  bookShrineContinuityDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "rgba(47,93,80,0.44)",
-  },
-  bookShrineContinuityText: {
-    color: "rgba(47,93,80,0.66)",
     fontSize: 12,
     lineHeight: 17,
-    fontWeight: "800",
-    textAlign: "center",
+    fontWeight: "500",
+    marginTop: 9,
   },
   beaconMark: {
     width: 38,
@@ -5373,22 +5633,16 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(247,195,107,0.13)",
   },
   activeBeaconBadge: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(247,195,107,0.10)",
-  },
-  activeBeaconDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "rgba(247,195,107,0.72)",
     shadowColor: "#F7C36B",
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.28,
-    shadowRadius: 8,
+    shadowOpacity: 0.16,
+    shadowRadius: 10,
     elevation: 2,
   },
   bookReturnScreen: {
@@ -5473,12 +5727,20 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#1E3E32",
+    overflow: "hidden",
+  },
+  bookAttributionCoverImage: {
+    width: "100%",
+    height: "100%",
   },
   bookAttributionCoverText: {
     color: "#F7F3EA",
-    fontSize: 24,
-    lineHeight: 30,
+    width: "100%",
+    fontSize: 12,
+    lineHeight: 16,
     fontWeight: "400",
+    textAlign: "center",
+    paddingHorizontal: 6,
     fontFamily: Platform.select({
       ios: "Georgia",
       android: "serif",
@@ -5498,12 +5760,35 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     marginBottom: 7,
   },
+  bookAttributionInputRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "transparent",
+  },
   bookAttributionInput: {
+    flex: 1,
+    minWidth: 0,
     color: colors.text,
     fontSize: 20,
     lineHeight: 25,
     fontWeight: "800",
     padding: 0,
+  },
+  bookAttributionClearButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(47,93,80,0.06)",
+  },
+  bookAttributionSelectedText: {
+    color: "rgba(47,93,80,0.54)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "600",
+    marginTop: 8,
   },
   bookLookupPanel: {
     marginTop: 14,
@@ -5533,6 +5818,13 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontStyle: "italic",
   },
+  bookLookupHelperText: {
+    color: "rgba(31,41,51,0.46)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "500",
+    marginBottom: 4,
+  },
   bookLookupChoice: {
     flexDirection: "row",
     alignItems: "center",
@@ -5543,7 +5835,10 @@ const styles = StyleSheet.create({
     borderBottomColor: "rgba(47,93,80,0.05)",
   },
   bookLookupChoiceSelected: {
-    opacity: 0.78,
+    backgroundColor: "rgba(47,93,80,0.06)",
+    borderBottomColor: "rgba(47,93,80,0.10)",
+    borderRadius: 12,
+    paddingHorizontal: 8,
   },
   bookLookupCover: {
     width: 34,
@@ -5574,11 +5869,26 @@ const styles = StyleSheet.create({
     minWidth: 0,
     backgroundColor: "transparent",
   },
+  bookLookupTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: "transparent",
+  },
   bookLookupBookTitle: {
+    flex: 1,
     color: colors.text,
     fontSize: 14,
     lineHeight: 19,
     fontWeight: "700",
+  },
+  bookLookupSelectedLabel: {
+    color: "rgba(47,93,80,0.66)",
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
   bookLookupBookAuthor: {
     color: colors.mutedText,
@@ -5631,7 +5941,12 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     alignItems: "center",
     justifyContent: "center",
+    overflow: "hidden",
     backgroundColor: "rgba(47,93,80,0.12)",
+  },
+  recentBookMiniCoverImage: {
+    width: "100%",
+    height: "100%",
   },
   recentBookMiniCoverText: {
     color: colors.accent,
@@ -5761,17 +6076,27 @@ const styles = StyleSheet.create({
     paddingBottom: 34,
     overflow: "hidden",
   },
+  bookRevealScrollView: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
   bookRevealContent: {
     flexGrow: 1,
     justifyContent: "center",
     backgroundColor: "transparent",
     paddingVertical: 28,
   },
+  bookRevealFooter: {
+    backgroundColor: "rgba(247,243,234,0.94)",
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(47,93,80,0.07)",
+  },
   bookRevealEyebrow: {
     color: "rgba(47,93,80,0.62)",
     fontSize: 13,
     lineHeight: 19,
-    fontWeight: "900",
+    fontWeight: "700",
     letterSpacing: 1.4,
     textTransform: "uppercase",
     textAlign: "center",
@@ -5811,6 +6136,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: 9,
+    overflow: "hidden",
+  },
+  bookRevealCoverImage: {
+    width: 86,
+    height: 118,
+    margin: -9,
   },
   bookRevealCoverTitle: {
     color: "#F7F3EA",
@@ -5830,22 +6161,27 @@ const styles = StyleSheet.create({
     color: "rgba(47,93,80,0.62)",
     fontSize: 12,
     lineHeight: 17,
-    fontWeight: "700",
+    fontWeight: "600",
     textTransform: "uppercase",
     letterSpacing: 1,
     marginBottom: 6,
   },
   bookRevealBookTitle: {
     color: colors.text,
-    fontSize: 20,
-    lineHeight: 25,
-    fontWeight: "800",
+    fontSize: 21,
+    lineHeight: 27,
+    fontWeight: "400",
+    fontFamily: Platform.select({
+      ios: "Georgia",
+      android: "serif",
+      default: "serif",
+    }),
   },
   bookRevealMeta: {
     color: colors.mutedText,
     fontSize: 14,
     lineHeight: 20,
-    fontWeight: "700",
+    fontWeight: "500",
     marginTop: 10,
   },
   bookRevealContinueButton: {
@@ -5858,7 +6194,7 @@ const styles = StyleSheet.create({
     color: "#FFF8ED",
     fontSize: 16,
     lineHeight: 22,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   bookRevealSecondaryButton: {
     alignItems: "center",
@@ -5869,7 +6205,7 @@ const styles = StyleSheet.create({
     color: "rgba(47,93,80,0.62)",
     fontSize: 15,
     lineHeight: 21,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   completedBookScreen: {
     flex: 1,
@@ -5928,6 +6264,12 @@ const styles = StyleSheet.create({
     padding: 12,
     borderWidth: 1,
     borderColor: "rgba(240,235,224,0.12)",
+    overflow: "hidden",
+  },
+  completedBookCoverImage: {
+    width: 110,
+    height: 154,
+    margin: -12,
   },
   completedBookCoverTitle: {
     color: "#F0EBE0",
@@ -6085,4 +6427,5 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
 });
+
 
