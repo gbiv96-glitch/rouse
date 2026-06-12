@@ -21,6 +21,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
+import { Fonts } from "@/constants/theme";
 import { searchGoogleBooks } from "@/services/googleBooks";
 import type { BookMetadata, BookMetadataFields } from "@/types/book";
 import { formatDuration } from "@/utils/formatDuration";
@@ -41,6 +42,7 @@ const ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY =
 const UNATTACHED_SESSION_TITLE = "Unassigned reading";
 const UNATTACHED_SESSION_DISPLAY_TITLE = "Reading session";
 const BOOK_LOOKUP_TIMEOUT_MS = 9500;
+const serifFont = Fonts?.serif ?? "serif";
 const colors = {
   background: "#F7F3EA",
   card: "#FFFFFF",
@@ -94,6 +96,7 @@ type Screen =
   | "manualLog"
   | "completedBook"
   | "reveal"
+  | "menu"
   | "diary"
   | "finishedBooks";
 
@@ -421,12 +424,25 @@ export default function HomeScreen() {
   const [manualLogMinutes, setManualLogMinutes] = useState("30");
   const [manualLogBookTitle, setManualLogBookTitle] = useState("");
   const [manualLogError, setManualLogError] = useState<string | null>(null);
+  const [selectedManualBookMetadata, setSelectedManualBookMetadata] =
+    useState<BookMetadata | null>(null);
+  const [isManualBookLookupRequested, setIsManualBookLookupRequested] =
+    useState(false);
+  const [manualBookLookupResults, setManualBookLookupResults] = useState<
+    BookMetadata[]
+  >([]);
+  const [isManualBookLookupLoading, setIsManualBookLookupLoading] =
+    useState(false);
+  const [hasManualBookLookupSearched, setHasManualBookLookupSearched] =
+    useState(false);
+  const [manualBookLookupError, setManualBookLookupError] = useState(false);
   const [recentSessions, setRecentSessions] = useState<ReadingSession[]>([]);
   const [totalCompletedSessions, setTotalCompletedSessions] = useState(0);
   const [bookLookupResults, setBookLookupResults] = useState<BookMetadata[]>([]);
   const [selectedBookMetadata, setSelectedBookMetadata] =
     useState<BookMetadata | null>(null);
   const [isBookLookupLoading, setIsBookLookupLoading] = useState(false);
+  const [isBookLookupRequested, setIsBookLookupRequested] = useState(false);
   const [hasBookLookupSearched, setHasBookLookupSearched] = useState(false);
   const [bookLookupError, setBookLookupError] = useState(false);
   const [sanctuaryReveal, setSanctuaryReveal] =
@@ -453,6 +469,10 @@ export default function HomeScreen() {
   const revealSceneScale = useRef(new Animated.Value(0.98)).current;
   const bookTitleInputRef = useRef<TextInput | null>(null);
   const bookLookupRequestId = useRef(0);
+  const manualBookLookupRequestId = useRef(0);
+  const manualBookLookupTimer = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const completedBookPromptIndex = useRef(
     Math.floor(Math.random() * completedBookReflectionPrompts.length),
   ).current;
@@ -512,6 +532,7 @@ export default function HomeScreen() {
       bookLookupRequestId.current += 1;
       setBookLookupResults([]);
       setIsBookLookupLoading(false);
+      setIsBookLookupRequested(false);
       setHasBookLookupSearched(false);
       setBookLookupError(false);
       return;
@@ -519,7 +540,7 @@ export default function HomeScreen() {
 
     const trimmedQuery = bookTitle.trim();
 
-    if (trimmedQuery.length < 3) {
+    if (!isBookLookupRequested || trimmedQuery.length < 3) {
       bookLookupRequestId.current += 1;
       setBookLookupResults([]);
       setIsBookLookupLoading(false);
@@ -587,7 +608,7 @@ export default function HomeScreen() {
     return () => {
       clearTimeout(lookupTimer);
     };
-  }, [bookTitle, screen]);
+  }, [bookTitle, isBookLookupRequested, screen]);
 
   useEffect(() => {
     if (screen !== "ritual") return;
@@ -1097,6 +1118,8 @@ export default function HomeScreen() {
       setLifetimeSeconds(updatedLifetimeSeconds);
       setPendingSessionSeconds(sessionSeconds);
       setBookTitle(currentBookTitle);
+      setSelectedBookMetadata(null);
+      setIsBookLookupRequested(false);
       setSessionMessage(`+${sessionDuration} added`);
       setIsReading(false);
       setActiveSessionStartTime(null);
@@ -1115,6 +1138,7 @@ export default function HomeScreen() {
   };
 
   const handleBookTitleChange = (nextTitle: string) => {
+    setIsBookLookupRequested(true);
     setBookTitle(nextTitle);
 
     if (selectedBookMetadata && nextTitle.trim() !== selectedBookMetadata.title) {
@@ -1124,6 +1148,7 @@ export default function HomeScreen() {
 
   const clearBookTitleSelection = () => {
     bookLookupRequestId.current += 1;
+    setIsBookLookupRequested(true);
     setBookTitle("");
     setSelectedBookMetadata(null);
     setBookLookupResults([]);
@@ -1134,11 +1159,116 @@ export default function HomeScreen() {
   };
 
   const selectGoogleBook = (book: BookMetadata) => {
+    setIsBookLookupRequested(true);
     setSelectedBookMetadata({
       ...book,
       coverUrl: normalizeStoredCoverUrl(book.coverUrl),
     });
     setBookTitle(book.title);
+  };
+
+  const resetManualBookLookup = () => {
+    manualBookLookupRequestId.current += 1;
+
+    if (manualBookLookupTimer.current) {
+      clearTimeout(manualBookLookupTimer.current);
+      manualBookLookupTimer.current = null;
+    }
+
+    setManualBookLookupResults([]);
+    setIsManualBookLookupLoading(false);
+    setHasManualBookLookupSearched(false);
+    setManualBookLookupError(false);
+  };
+
+  const searchManualBookTitle = (query: string) => {
+    const trimmedQuery = query.trim();
+
+    if (trimmedQuery.length < 3) {
+      resetManualBookLookup();
+      return;
+    }
+
+    const requestId = manualBookLookupRequestId.current + 1;
+    manualBookLookupRequestId.current = requestId;
+
+    if (manualBookLookupTimer.current) {
+      clearTimeout(manualBookLookupTimer.current);
+    }
+
+    setManualBookLookupResults([]);
+    setIsManualBookLookupLoading(true);
+    setHasManualBookLookupSearched(false);
+    setManualBookLookupError(false);
+
+    manualBookLookupTimer.current = setTimeout(async () => {
+      try {
+        const results = await Promise.race<BookMetadata[]>([
+          searchGoogleBooks(trimmedQuery),
+          new Promise<BookMetadata[]>((_, reject) =>
+            setTimeout(
+              () => reject(new Error("Book lookup timed out")),
+              BOOK_LOOKUP_TIMEOUT_MS,
+            ),
+          ),
+        ]);
+
+        if (manualBookLookupRequestId.current !== requestId) {
+          return;
+        }
+
+        setManualBookLookupResults(results);
+        setHasManualBookLookupSearched(true);
+        setManualBookLookupError(false);
+      } catch (error) {
+        if (manualBookLookupRequestId.current !== requestId) {
+          return;
+        }
+
+        console.warn("Rousd Google Books lookup could not finish", error);
+        setManualBookLookupResults([]);
+        setHasManualBookLookupSearched(true);
+        setManualBookLookupError(true);
+      } finally {
+        if (manualBookLookupRequestId.current === requestId) {
+          setIsManualBookLookupLoading(false);
+        }
+      }
+    }, 450);
+  };
+
+  const handleManualBookTitleChange = (nextTitle: string) => {
+    const trimmedTitle = nextTitle.trim();
+    setIsManualBookLookupRequested(true);
+    setManualLogBookTitle(nextTitle);
+
+    if (
+      selectedManualBookMetadata &&
+      trimmedTitle !== selectedManualBookMetadata.title
+    ) {
+      setSelectedManualBookMetadata(null);
+    }
+
+    const knownMetadata = trimmedTitle
+      ? findKnownBookMetadataByTitle(trimmedTitle)
+      : null;
+
+    if (!knownMetadata || knownMetadata.title !== trimmedTitle) {
+      setManualBookLookupResults([]);
+      setHasManualBookLookupSearched(false);
+      setManualBookLookupError(false);
+    }
+
+    searchManualBookTitle(nextTitle);
+  };
+
+  const selectManualGoogleBook = (book: BookMetadata) => {
+    setIsManualBookLookupRequested(true);
+    setSelectedManualBookMetadata({
+      ...book,
+      coverUrl: normalizeStoredCoverUrl(book.coverUrl),
+    });
+    setManualLogBookTitle(book.title);
   };
 
   const findKnownBookMetadataByTitle = (title: string): BookMetadata | null => {
@@ -1393,16 +1523,27 @@ export default function HomeScreen() {
     setManualLogBookTitle(currentBookTitle);
     setManualLogNote("");
     setManualLogError(null);
+    setSelectedManualBookMetadata(null);
+    setIsManualBookLookupRequested(false);
+    resetManualBookLookup();
     setSanctuaryReveal(null);
     setCompletedBookMoment(null);
     setSessionMessage(null);
     setScreen("manualLog");
   };
 
+  const openHomeDestination = async (destination: Screen) => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setScreen(destination);
+  };
+
   const cancelManualLog = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setManualLogNote("");
     setManualLogError(null);
+    setSelectedManualBookMetadata(null);
+    setIsManualBookLookupRequested(false);
+    resetManualBookLookup();
     setScreen("home");
   };
 
@@ -1423,6 +1564,14 @@ export default function HomeScreen() {
     const trimmedTitle = manualLogBookTitle.trim();
     const trimmedNote = manualLogNote.trim();
     const titleToSave = trimmedTitle || "Logged reading";
+    const selectedManualMetadata =
+      trimmedTitle &&
+      selectedManualBookMetadata?.title.trim() === trimmedTitle
+        ? selectedManualBookMetadata
+        : trimmedTitle
+          ? findKnownBookMetadataByTitle(trimmedTitle)
+          : null;
+    const manualMetadataFields = getBookMetadataFields(selectedManualMetadata);
     const previousLifetimeSeconds = lifetimeSeconds;
     const updatedTodaySeconds = seconds + manualSessionSeconds;
     const updatedLifetimeSeconds = lifetimeSeconds + manualSessionSeconds;
@@ -1436,6 +1585,7 @@ export default function HomeScreen() {
       reflection: trimmedNote || null,
       createdAt: new Date().toISOString(),
       source: "logged",
+      ...manualMetadataFields,
     };
 
     const updatedSessions = [newSession, ...recentSessions];
@@ -1469,8 +1619,12 @@ export default function HomeScreen() {
       sessionMinutes: sessionDuration,
       ctaText: revealCopy.ctaText,
       source: "logged",
+      ...manualMetadataFields,
     });
     setManualLogNote("");
+    setSelectedManualBookMetadata(null);
+    setIsManualBookLookupRequested(false);
+    resetManualBookLookup();
     setSessionReflection("");
     setManualLogError(null);
     setScreen("reveal");
@@ -1819,11 +1973,19 @@ export default function HomeScreen() {
       const shouldShowBookLookup =
         bookLookupQueryIsReady &&
         (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
-      const selectedBookCoverUrl = normalizeStoredCoverUrl(
-        selectedBookMetadata?.coverUrl,
+      const knownBookMetadata = getValidBookTitle(bookTitle)
+        ? findKnownBookMetadataByTitle(bookTitle)
+        : null;
+      const attributionPreviewMetadata =
+        selectedBookMetadata ?? knownBookMetadata;
+      const attributionPreviewCoverUrl = normalizeStoredCoverUrl(
+        attributionPreviewMetadata?.coverUrl,
       );
       const attributionPreviewTitle =
-        selectedBookMetadata?.title || getValidBookTitle(bookTitle) || "R";
+        attributionPreviewMetadata?.title || getValidBookTitle(bookTitle) || "R";
+      const shouldShowAttributionSaveButton = Boolean(
+        canCompleteBook || selectedBookMetadata || knownBookMetadata,
+      );
 
       return (
       <ThemedView
@@ -1854,9 +2016,9 @@ export default function HomeScreen() {
 
           <View style={styles.bookAttributionCard}>
             <View style={styles.bookAttributionCover}>
-              {selectedBookCoverUrl ? (
+              {attributionPreviewCoverUrl ? (
                 <Image
-                  source={{ uri: selectedBookCoverUrl }}
+                  source={{ uri: attributionPreviewCoverUrl }}
                   style={styles.bookAttributionCoverImage}
                   resizeMode="cover"
                 />
@@ -1878,6 +2040,7 @@ export default function HomeScreen() {
                   placeholderTextColor="rgba(31,41,51,0.38)"
                   value={bookTitle}
                   onChangeText={handleBookTitleChange}
+                  onFocus={() => setIsBookLookupRequested(true)}
                   style={styles.bookAttributionInput}
                   returnKeyType="done"
                   blurOnSubmit
@@ -1909,9 +2072,30 @@ export default function HomeScreen() {
                 >
                   Selected from Google Books
                 </ThemedText>
+              ) : knownBookMetadata ? (
+                <ThemedText
+                  style={styles.bookAttributionSelectedText}
+                  numberOfLines={1}
+                >
+                  Saved book details found
+                </ThemedText>
               ) : null}
             </View>
           </View>
+
+          {shouldShowAttributionSaveButton ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.bookAttributionSaveButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={saveBookForSession}
+            >
+              <ThemedText style={styles.bookAttributionSaveButtonText}>
+                Save this session
+              </ThemedText>
+            </Pressable>
+          ) : null}
 
           {shouldShowBookLookup ? (
             <View style={styles.bookLookupPanel}>
@@ -2099,18 +2283,6 @@ export default function HomeScreen() {
                 Not this time
               </ThemedText>
             </Pressable>
-
-            <Pressable
-              style={({ pressed }) => [
-                styles.bookReturnSaveButton,
-                pressed && styles.buttonPressed,
-              ]}
-              onPress={saveBookForSession}
-            >
-              <ThemedText style={styles.bookReturnSaveButtonText}>
-                Save to book
-              </ThemedText>
-            </Pressable>
           </View>
         </ScrollView>
         </KeyboardAvoidingView>
@@ -2120,10 +2292,19 @@ export default function HomeScreen() {
 
     case "manualLog": {
       const presetMinutes = ["10", "20", "30", "45", "60"];
+      const manualKnownBookMetadata = getValidBookTitle(manualLogBookTitle)
+        ? findKnownBookMetadataByTitle(manualLogBookTitle)
+        : null;
+      const shouldShowManualBookLookup =
+        isManualBookLookupRequested &&
+        manualLogBookTitle.trim().length >= 3 &&
+        (isManualBookLookupLoading ||
+          hasManualBookLookupSearched ||
+          manualBookLookupResults.length > 0);
 
       return (
       <ThemedView
-        style={[styles.closeSessionScreen, { paddingTop: insets.top + 32 }]}
+        style={[styles.closeSessionScreen, { paddingTop: insets.top + 22 }]}
       >
         <View style={styles.sessionGlowOne} />
         <View style={styles.sessionGlowTwo} />
@@ -2136,13 +2317,27 @@ export default function HomeScreen() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={[
             styles.closeSessionContent,
-            { paddingBottom: insets.bottom + 80 },
+            styles.manualLogContent,
+            { paddingBottom: insets.bottom + 132 },
           ]}
         >
-          <ThemedText style={styles.closeEyebrow}>Manual log</ThemedText>
+          <Pressable
+            style={({ pressed }) => [
+              styles.diaryBackButton,
+              styles.manualLogBackButton,
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={() => openHomeDestination("menu")}
+          >
+            <ThemedText style={styles.diaryBackButtonText}>
+              Back to menu
+            </ThemedText>
+          </Pressable>
+
+          <ThemedText style={styles.closeEyebrow}>Reading moment</ThemedText>
           <ThemedText style={styles.closeTitle}>What did the time hold?</ThemedText>
           <ThemedText style={styles.closeMinutes}>
-            Capture a reading moment, with or without the timer.
+            Capture reading time, with or without the timer.
           </ThemedText>
 
           <View style={styles.manualPresetRow}>
@@ -2192,10 +2387,101 @@ export default function HomeScreen() {
             placeholder="Book title"
             placeholderTextColor="rgba(255,255,255,0.45)"
             value={manualLogBookTitle}
-            onChangeText={setManualLogBookTitle}
+            onChangeText={handleManualBookTitleChange}
             style={[styles.closeBookInput, styles.manualBookInput]}
-            returnKeyType="next"
+            returnKeyType="done"
+            blurOnSubmit
+            onSubmitEditing={Keyboard.dismiss}
           />
+
+          {selectedManualBookMetadata ? (
+            <ThemedText style={styles.manualBookMetadataHint}>
+              Selected from Google Books
+            </ThemedText>
+          ) : manualKnownBookMetadata ? (
+            <ThemedText style={styles.manualBookMetadataHint}>
+              Saved book details found
+            </ThemedText>
+          ) : null}
+
+          {shouldShowManualBookLookup ? (
+            <View style={styles.manualBookLookupPanel}>
+              <View style={styles.bookLookupHeaderRow}>
+                <ThemedText style={styles.manualBookLookupTitle}>
+                  Possible matches
+                </ThemedText>
+                {isManualBookLookupLoading ? (
+                  <ThemedText style={styles.manualBookLookupLoading}>
+                    Looking softly...
+                  </ThemedText>
+                ) : null}
+              </View>
+
+              {manualBookLookupResults.map((book) => {
+                const isSelected =
+                  selectedManualBookMetadata?.googleBooksId === book.googleBooksId;
+
+                return (
+                  <Pressable
+                    key={book.googleBooksId ?? book.title}
+                    style={({ pressed }) => [
+                      styles.manualBookLookupChoice,
+                      isSelected && styles.manualBookLookupChoiceSelected,
+                      pressed && styles.buttonPressed,
+                    ]}
+                    onPress={() => selectManualGoogleBook(book)}
+                  >
+                    {book.coverUrl ? (
+                      <Image
+                        source={{ uri: book.coverUrl }}
+                        style={styles.manualBookLookupCover}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <View style={styles.manualBookLookupCoverPlaceholder}>
+                        <ThemedText style={styles.manualBookLookupCoverText}>
+                          R
+                        </ThemedText>
+                      </View>
+                    )}
+                    <View style={styles.bookLookupCopy}>
+                      <View style={styles.bookLookupTitleRow}>
+                        <ThemedText
+                          style={styles.manualBookLookupBookTitle}
+                          numberOfLines={2}
+                        >
+                          {book.title}
+                        </ThemedText>
+                        {isSelected ? (
+                          <ThemedText style={styles.manualBookLookupSelectedLabel}>
+                            Selected
+                          </ThemedText>
+                        ) : null}
+                      </View>
+                      {book.author ? (
+                        <ThemedText
+                          style={styles.manualBookLookupBookAuthor}
+                          numberOfLines={1}
+                        >
+                          {book.author}
+                        </ThemedText>
+                      ) : null}
+                    </View>
+                  </Pressable>
+                );
+              })}
+
+              {hasManualBookLookupSearched &&
+              !isManualBookLookupLoading &&
+              manualBookLookupResults.length === 0 ? (
+                <ThemedText style={styles.manualBookLookupEmptyText}>
+                  {manualBookLookupError
+                    ? "Book search is unavailable right now. You can still log this title."
+                    : "No matches found. You can still log this title."}
+                </ThemedText>
+              ) : null}
+            </View>
+          ) : null}
 
           <TextInput
             placeholder="Optional note or reflection"
@@ -2213,10 +2499,13 @@ export default function HomeScreen() {
             </ThemedText>
           )}
 
-          <ThemedText style={styles.closeHelperText}>
-            Capture reading time away from the timer.
-          </ThemedText>
-
+        </ScrollView>
+        <View
+          style={[
+            styles.manualLogFooter,
+            { paddingBottom: Math.max(insets.bottom + 12, 24) },
+          ]}
+        >
           <View style={styles.closeButtonRow}>
             <Pressable
               style={({ pressed }) => [
@@ -2242,7 +2531,7 @@ export default function HomeScreen() {
               </ThemedText>
             </Pressable>
           </View>
-        </ScrollView>
+        </View>
         </KeyboardAvoidingView>
       </ThemedView>
     );
@@ -2274,7 +2563,7 @@ export default function HomeScreen() {
           ? "You read it today."
           : `You read it across ${daysCount} days.`;
       const completedBookSessionLabel =
-        completedBookMoment.sessionCount === 1 ? "SESSION" : "SESSIONS";
+        completedBookMoment.sessionCount === 1 ? "session" : "sessions";
       const completedBookBottomPadding = isKeyboardVisible
         ? Math.max(insets.bottom + 24, 32)
         : insets.bottom + 96;
@@ -2367,7 +2656,7 @@ export default function HomeScreen() {
                 {formatDuration(Number(completedBookMoment.totalBookMinutes))}
               </ThemedText>
               <ThemedText style={styles.completedBookStatLabel}>
-                TIME SPENT
+                time spent
               </ThemedText>
             </View>
             <View style={styles.completedBookStatDivider} />
@@ -2376,7 +2665,7 @@ export default function HomeScreen() {
                 {daysCount}
               </ThemedText>
               <ThemedText style={styles.completedBookStatLabel}>
-                DAYS
+                days
               </ThemedText>
             </View>
           </View>
@@ -2457,7 +2746,7 @@ export default function HomeScreen() {
 
       return (
       <ThemedView
-        style={[styles.bookRevealScreen, { paddingTop: insets.top + 30 }]}
+        style={[styles.bookRevealScreen, { paddingTop: insets.top + 18 }]}
       >
         <View pointerEvents="none" style={styles.bookReturnGlowTop} />
         <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
@@ -2620,10 +2909,10 @@ export default function HomeScreen() {
                 styles.diaryBackButton,
                 pressed && styles.buttonPressed,
               ]}
-              onPress={() => setScreen("home")}
+              onPress={() => openHomeDestination("menu")}
             >
               <ThemedText style={styles.diaryBackButtonText}>
-                Return home
+                Back to menu
               </ThemedText>
             </Pressable>
 
@@ -2631,18 +2920,6 @@ export default function HomeScreen() {
             <ThemedText style={styles.diarySubtitle}>
               A private record.
             </ThemedText>
-
-            <Pressable
-              style={({ pressed }) => [
-                styles.finishedBooksInlineButton,
-                pressed && styles.buttonPressed,
-              ]}
-              onPress={() => setScreen("finishedBooks")}
-            >
-              <ThemedText style={styles.finishedBooksInlineButtonText}>
-                Finished books
-              </ThemedText>
-            </Pressable>
 
             {diarySessions.length === 0 ? (
               <View style={styles.diaryEmptyCard}>
@@ -2696,7 +2973,6 @@ export default function HomeScreen() {
                               {getDisplaySessionTitle(session.title)}
                             </ThemedText>
                             <ThemedText style={styles.diaryMeta}>
-                              {session.source === "logged" ? "Logged" : "Timed"}{" - "}
                               {formatSessionTimestamp(
                                 session.createdAt,
                                 legacyDate,
@@ -2739,10 +3015,10 @@ export default function HomeScreen() {
                 styles.finishedBooksTopReturnButton,
                 pressed && styles.buttonPressed,
               ]}
-              onPress={() => setScreen("home")}
+              onPress={() => openHomeDestination("menu")}
             >
               <ThemedText style={styles.finishedBooksTopReturnButtonText}>
-                Return home
+                Back to menu
               </ThemedText>
             </Pressable>
 
@@ -2852,6 +3128,123 @@ export default function HomeScreen() {
           </ScrollView>
         </ThemedView>
       );
+    case "menu":
+      return (
+        <ThemedView style={styles.menuScreen}>
+          <ScrollView
+            style={styles.menuScrollView}
+            contentContainerStyle={[
+              styles.menuContent,
+              { paddingTop: insets.top + 48, paddingBottom: insets.bottom + 36 },
+            ]}
+          >
+            <Pressable
+              style={({ pressed }) => [
+                styles.diaryBackButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() => openHomeDestination("home")}
+            >
+              <ThemedText style={styles.diaryBackButtonText}>
+                Return home
+              </ThemedText>
+            </Pressable>
+
+            <ThemedText style={styles.menuEyebrow}>Menu</ThemedText>
+            <ThemedText style={styles.menuTitle}>Nearby places.</ThemedText>
+            <ThemedText style={styles.menuSubtitle}>
+              The quieter corners of your reading life.
+            </ThemedText>
+
+            <View style={styles.menuCardStack}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.menuNavCard,
+                  pressed && styles.buttonPressed,
+                ]}
+                onPress={() => openHomeDestination("diary")}
+              >
+                <View style={styles.menuNavIconCircle}>
+                  <Ionicons
+                    name="book-outline"
+                    size={19}
+                    color="rgba(47,93,80,0.72)"
+                  />
+                </View>
+                <View style={styles.menuNavCopy}>
+                  <ThemedText style={styles.menuNavTitle}>Diary</ThemedText>
+                  <ThemedText style={styles.menuNavSubtext}>
+                    Your private reading journal
+                  </ThemedText>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={17}
+                  color="rgba(47,93,80,0.34)"
+                />
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.menuNavCard,
+                  pressed && styles.buttonPressed,
+                ]}
+                onPress={() => openHomeDestination("finishedBooks")}
+              >
+                <View style={styles.menuNavIconCircle}>
+                  <Ionicons
+                    name="library-outline"
+                    size={19}
+                    color="rgba(47,93,80,0.72)"
+                  />
+                </View>
+                <View style={styles.menuNavCopy}>
+                  <ThemedText style={styles.menuNavTitle}>
+                    Finished Books
+                  </ThemedText>
+                  <ThemedText style={styles.menuNavSubtext}>
+                    Your quiet shelf
+                  </ThemedText>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={17}
+                  color="rgba(47,93,80,0.34)"
+                />
+              </Pressable>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.menuNavCard,
+                  pressed && styles.buttonPressed,
+                ]}
+                onPress={openManualLog}
+              >
+                <View style={styles.menuNavIconCircle}>
+                  <Ionicons
+                    name="create-outline"
+                    size={19}
+                    color="rgba(47,93,80,0.72)"
+                  />
+                </View>
+                <View style={styles.menuNavCopy}>
+                  <ThemedText style={styles.menuNavTitle}>
+                    Add a reading moment
+                  </ThemedText>
+                  <ThemedText style={styles.menuNavSubtext}>
+                    For reading away from the timer
+                  </ThemedText>
+                </View>
+                <Ionicons
+                  name="chevron-forward"
+                  size={17}
+                  color="rgba(47,93,80,0.34)"
+                />
+              </Pressable>
+            </View>
+          </ScrollView>
+        </ThemedView>
+      );
     case "home":
       return (
     <ScrollView
@@ -2862,7 +3255,7 @@ export default function HomeScreen() {
       ]}
     >
       <ThemedView
-        style={[styles.container, { paddingTop: insets.top + 18 }]}
+        style={[styles.container, { paddingTop: insets.top + 28 }]}
       >
         <View pointerEvents="none" style={styles.warmVignetteTop} />
         <View pointerEvents="none" style={styles.warmVignetteBottom} />
@@ -2894,7 +3287,7 @@ export default function HomeScreen() {
               styles.menuButton,
               pressed && styles.buttonPressed,
             ]}
-            onPress={() => setScreen("diary")}
+            onPress={() => openHomeDestination("menu")}
           >
             <Ionicons
               name="ellipsis-vertical"
@@ -2922,22 +3315,25 @@ export default function HomeScreen() {
           </View>
 
           <View style={styles.bookShrinePanel}>
-            <View style={styles.bookShrineCover}>
-              {currentBookCoverUrl ? (
-                <Image
-                  source={{ uri: currentBookCoverUrl }}
-                  style={styles.bookShrineCoverImage}
-                  resizeMode="cover"
-                />
-              ) : (
-                <ThemedText
-                  style={styles.bookShrineCoverTitle}
-                  numberOfLines={1}
-                  ellipsizeMode="tail"
-                >
-                  {currentBookDisplayTitle}
-                </ThemedText>
-              )}
+            <View style={styles.bookShrineCoverWrap}>
+              <View pointerEvents="none" style={styles.bookShrineCoverGlow} />
+              <View style={styles.bookShrineCover}>
+                {currentBookCoverUrl ? (
+                  <Image
+                    source={{ uri: currentBookCoverUrl }}
+                    style={styles.bookShrineCoverImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <ThemedText
+                    style={styles.bookShrineCoverTitle}
+                    numberOfLines={1}
+                    ellipsizeMode="tail"
+                  >
+                    {currentBookDisplayTitle}
+                  </ThemedText>
+                )}
+              </View>
             </View>
 
             <View style={styles.bookShrineCopy}>
@@ -2993,7 +3389,7 @@ export default function HomeScreen() {
               styles.homeShortcutCard,
               pressed && styles.buttonPressed,
             ]}
-            onPress={() => setScreen("diary")}
+            onPress={() => openHomeDestination("diary")}
           >
             <View style={styles.homeShortcutTopRow}>
               <View style={styles.homeShortcutIconCircle}>
@@ -3022,7 +3418,7 @@ export default function HomeScreen() {
               styles.homeShortcutCard,
               pressed && styles.buttonPressed,
             ]}
-            onPress={() => setScreen("finishedBooks")}
+            onPress={() => openHomeDestination("finishedBooks")}
           >
             <View style={styles.homeShortcutTopRow}>
               <View style={styles.homeShortcutIconCircle}>
@@ -3065,7 +3461,7 @@ export default function HomeScreen() {
                 styles.sessionsViewAllButton,
                 pressed && styles.buttonPressed,
               ]}
-              onPress={() => setScreen("diary")}
+              onPress={() => openHomeDestination("diary")}
             >
               <ThemedText style={styles.sessionsViewAllText}>
                 View all
@@ -3123,6 +3519,13 @@ export default function HomeScreen() {
           onPress={openManualLog}
         >
           <View style={styles.manualLogButtonContent}>
+            <View style={styles.manualLogButtonIcon}>
+              <Ionicons
+                name="create-outline"
+                size={17}
+                color="rgba(47,93,80,0.58)"
+              />
+            </View>
             <ThemedText style={styles.manualLogButtonText}>
               Add a reading moment
             </ThemedText>
@@ -3294,11 +3697,7 @@ const styles = StyleSheet.create({
     lineHeight: 42,
     fontWeight: "400",
     letterSpacing: 0,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   welcomeScreen: {
     flex: 1,
@@ -3460,11 +3859,7 @@ const styles = StyleSheet.create({
     lineHeight: 42,
     fontWeight: "400",
     letterSpacing: -1.1,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   welcomeBody: {
     color: "rgba(31,41,51,0.68)",
@@ -3559,16 +3954,12 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   appName: {
-    fontSize: 43,
-    lineHeight: 48,
+    fontSize: 52,
+    lineHeight: 57,
     fontWeight: "400",
     color: "#1B2A22",
     letterSpacing: -1.9,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   headerSubtitle: {
     fontSize: 14,
@@ -3786,11 +4177,7 @@ const styles = StyleSheet.create({
     lineHeight: 35,
     fontWeight: "400",
     letterSpacing: -1.05,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   sanctuaryHeroSubtitle: {
     color: "rgba(255,248,237,0.78)",
@@ -4075,13 +4462,13 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.13)",
   },
   manualLogButton: {
-    backgroundColor: "rgba(255,255,255,0.46)",
+    backgroundColor: "rgba(255,248,237,0.58)",
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.07)",
+    borderColor: "rgba(47,93,80,0.08)",
     borderRadius: 24,
     minHeight: 56,
-    paddingVertical: 13,
-    paddingHorizontal: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     zIndex: 3,
     ...softCardShadow,
   },
@@ -4091,12 +4478,23 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: "transparent",
   },
+  manualLogButtonIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(47,93,80,0.07)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.07)",
+  },
   manualLogButtonText: {
     flex: 1,
-    color: "rgba(36,72,62,0.84)",
-    fontSize: 15,
+    color: "rgba(36,72,62,0.78)",
+    fontSize: 14,
     lineHeight: 21,
-    fontWeight: "700",
+    fontWeight: "600",
+    fontFamily: serifFont,
   },
   manualLogChevron: {
     color: "rgba(36,72,62,0.44)",
@@ -4411,17 +4809,94 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: "800",
   },
+  menuScreen: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  menuScrollView: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
+  menuContent: {
+    paddingHorizontal: 24,
+  },
+  menuEyebrow: {
+    color: "rgba(47,93,80,0.58)",
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: "700",
+    letterSpacing: 1.1,
+    textTransform: "uppercase",
+  },
+  menuTitle: {
+    color: "#1B2A22",
+    fontSize: 42,
+    lineHeight: 48,
+    fontWeight: "400",
+    letterSpacing: -0.7,
+    marginTop: 8,
+    fontFamily: serifFont,
+  },
+  menuSubtitle: {
+    color: "rgba(47,93,80,0.54)",
+    fontSize: 16,
+    lineHeight: 23,
+    fontStyle: "italic",
+    fontWeight: "600",
+    marginTop: 8,
+  },
+  menuCardStack: {
+    gap: 12,
+    marginTop: 28,
+    backgroundColor: "transparent",
+  },
+  menuNavCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 13,
+    backgroundColor: "rgba(255,248,237,0.70)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    borderRadius: 22,
+    paddingVertical: 15,
+    paddingHorizontal: 15,
+    ...softCardShadow,
+  },
+  menuNavIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(47,93,80,0.07)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.07)",
+  },
+  menuNavCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  menuNavTitle: {
+    color: colors.text,
+    fontSize: 16,
+    lineHeight: 22,
+    fontWeight: "700",
+  },
+  menuNavSubtext: {
+    color: "rgba(31,41,51,0.54)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "500",
+    marginTop: 2,
+  },
   diaryTitle: {
     color: "#1B2A22",
     fontSize: 42,
     lineHeight: 48,
     fontWeight: "400",
     letterSpacing: -0.7,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   diarySubtitle: {
     color: "rgba(47,93,80,0.54)",
@@ -4532,22 +5007,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 15,
   },
-  finishedBooksInlineButton: {
-    alignSelf: "flex-start",
-    backgroundColor: "rgba(255,248,237,0.76)",
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
-    borderRadius: 999,
-    paddingVertical: 10,
-    paddingHorizontal: 15,
-    marginTop: 22,
-  },
-  finishedBooksInlineButtonText: {
-    color: colors.accentDark,
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: "800",
-  },
   finishedBooksHomeButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -4633,11 +5092,7 @@ const styles = StyleSheet.create({
     lineHeight: 32,
     fontWeight: "400",
     letterSpacing: -0.3,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   finishedBooksSubtitle: {
     color: "#8A8578",
@@ -4800,11 +5255,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
     marginTop: 18,
     maxWidth: 320,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   quietSessionSubtitle: {
     color: "rgba(255,248,237,0.62)",
@@ -4910,11 +5361,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textAlign: "center",
     maxWidth: 320,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   closeTransitionScreen: {
     flex: 1,
@@ -4942,7 +5389,7 @@ const styles = StyleSheet.create({
   },
   closeTransitionTitle: {
     color: "#FFF8ED",
-    fontFamily: Platform.select({ ios: "Georgia", android: "serif", default: "serif" }),
+    fontFamily: serifFont,
     fontSize: 36,
     lineHeight: 43,
     fontWeight: "400",
@@ -4980,6 +5427,14 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     paddingVertical: 42,
   },
+  manualLogContent: {
+    justifyContent: "flex-start",
+    paddingTop: 20,
+    paddingBottom: 20,
+  },
+  manualLogBackButton: {
+    marginBottom: 18,
+  },
   closeEyebrow: {
     color: "rgba(255,248,237,0.62)",
     fontSize: 13,
@@ -4993,17 +5448,18 @@ const styles = StyleSheet.create({
     color: "#FFF8ED",
     fontSize: 32,
     lineHeight: 39,
-    fontWeight: "800",
-    letterSpacing: -0.8,
+    fontWeight: "400",
+    letterSpacing: 0,
     maxWidth: 330,
+    fontFamily: serifFont,
   },
   closeMinutes: {
     color: "rgba(255,248,237,0.62)",
     fontSize: 16,
     lineHeight: 24,
-    fontWeight: "600",
-    marginTop: 14,
-    marginBottom: 24,
+    fontWeight: "500",
+    marginTop: 10,
+    marginBottom: 18,
   },
   closeBookInput: {
     backgroundColor: "rgba(255,248,237,0.11)",
@@ -5020,8 +5476,95 @@ const styles = StyleSheet.create({
   manualBookInput: {
     marginTop: 14,
   },
+  manualBookMetadataHint: {
+    color: "rgba(255,248,237,0.58)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "600",
+    marginTop: 8,
+  },
+  manualBookLookupPanel: {
+    marginTop: 12,
+    backgroundColor: "rgba(255,248,237,0.10)",
+    borderRadius: 20,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "rgba(255,248,237,0.14)",
+  },
+  manualBookLookupTitle: {
+    color: "rgba(255,248,237,0.78)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "700",
+  },
+  manualBookLookupLoading: {
+    color: "rgba(255,248,237,0.50)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontStyle: "italic",
+  },
+  manualBookLookupChoice: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    backgroundColor: "transparent",
+    borderRadius: 14,
+    paddingVertical: 9,
+    paddingHorizontal: 8,
+  },
+  manualBookLookupChoiceSelected: {
+    backgroundColor: "rgba(255,248,237,0.10)",
+  },
+  manualBookLookupCover: {
+    width: 34,
+    height: 46,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,248,237,0.12)",
+  },
+  manualBookLookupCoverPlaceholder: {
+    width: 34,
+    height: 46,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,248,237,0.12)",
+  },
+  manualBookLookupCoverText: {
+    color: "rgba(255,248,237,0.72)",
+    fontSize: 14,
+    lineHeight: 19,
+    fontFamily: serifFont,
+  },
+  manualBookLookupBookTitle: {
+    color: "#FFF8ED",
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: "600",
+  },
+  manualBookLookupSelectedLabel: {
+    color: "rgba(255,248,237,0.68)",
+    fontSize: 9,
+    lineHeight: 13,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  manualBookLookupBookAuthor: {
+    color: "rgba(255,248,237,0.52)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "500",
+    marginTop: 2,
+  },
+  manualBookLookupEmptyText: {
+    color: "rgba(255,248,237,0.58)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontStyle: "italic",
+    paddingVertical: 8,
+  },
   manualNoteInput: {
-    minHeight: 104,
+    minHeight: 82,
     fontSize: 16,
     lineHeight: 23,
   },
@@ -5030,8 +5573,8 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: 10,
     backgroundColor: "transparent",
-    marginTop: 26,
-    marginBottom: 16,
+    marginTop: 20,
+    marginBottom: 14,
   },
   manualPresetChip: {
     backgroundColor: "rgba(255,248,237,0.10)",
@@ -5074,6 +5617,12 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: "transparent",
   },
+  manualLogFooter: {
+    backgroundColor: "rgba(27,66,52,0.96)",
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: "rgba(255,248,237,0.10)",
+  },
   closeSecondaryButton: {
     flex: 1,
     backgroundColor: "rgba(255,255,255,0.12)",
@@ -5085,9 +5634,10 @@ const styles = StyleSheet.create({
   },
   closeSecondaryButtonText: {
     color: "rgba(255,255,255,0.72)",
-    fontSize: 15,
-    lineHeight: 21,
-    fontWeight: "900",
+    fontSize: 17,
+    lineHeight: 23,
+    fontWeight: "700",
+    letterSpacing: 0,
   },
   closeSaveButton: {
     flex: 1,
@@ -5098,9 +5648,10 @@ const styles = StyleSheet.create({
   },
   closeSaveButtonText: {
     color: colors.sessionBackground,
-    fontSize: 15,
-    lineHeight: 21,
-    fontWeight: "900",
+    fontSize: 17,
+    lineHeight: 23,
+    fontWeight: "700",
+    letterSpacing: 0,
   },
 
   revealScreen: {
@@ -5408,9 +5959,9 @@ const styles = StyleSheet.create({
   },
   revealCopyCard: {
     backgroundColor: "rgba(255,248,237,0.94)",
-    borderRadius: 28,
-    padding: 22,
-    marginBottom: 34,
+    borderRadius: 26,
+    padding: 16,
+    marginBottom: 22,
   },
   revealStageLabel: {
     color: colors.accentDark,
@@ -5419,7 +5970,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 1.1,
     textTransform: "uppercase",
-    marginBottom: 8,
+    marginBottom: 6,
   },
   revealMainCopy: {
     color: colors.text,
@@ -5427,12 +5978,8 @@ const styles = StyleSheet.create({
     lineHeight: 32,
     fontWeight: "400",
     letterSpacing: 0,
-    marginBottom: 8,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    marginBottom: 6,
+    fontFamily: serifFont,
   },
   revealSubCopy: {
     color: colors.mutedText,
@@ -5442,7 +5989,7 @@ const styles = StyleSheet.create({
   },
   sessionReflectionWrap: {
     backgroundColor: "transparent",
-    marginBottom: 18,
+    marginBottom: 12,
   },
   sessionReflectionLabel: {
     color: "rgba(47,93,80,0.58)",
@@ -5452,7 +5999,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   sessionReflectionInput: {
-    height: 86,
+    height: 76,
     backgroundColor: "rgba(255,248,237,0.76)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.10)",
@@ -5511,7 +6058,7 @@ const styles = StyleSheet.create({
     right: -38,
     height: 196,
     borderRadius: 116,
-    backgroundColor: "rgba(247,195,107,0.20)",
+    backgroundColor: "rgba(255,248,237,0.22)",
   },
   bookShrineTopRow: {
     flexDirection: "row",
@@ -5552,6 +6099,27 @@ const styles = StyleSheet.create({
     gap: 15,
     backgroundColor: "transparent",
   },
+  bookShrineCoverWrap: {
+    width: 140,
+    height: 188,
+    alignItems: "center",
+    justifyContent: "center",
+    position: "relative",
+    shadowColor: "#C98568",
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.2,
+    shadowRadius: 26,
+    elevation: 5,
+  },
+  bookShrineCoverGlow: {
+    position: "absolute",
+    top: -8,
+    left: -8,
+    right: -8,
+    bottom: -8,
+    borderRadius: 22,
+    backgroundColor: "rgba(247,195,107,0.16)",
+  },
   bookShrineCover: {
     width: 140,
     height: 188,
@@ -5563,11 +6131,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     paddingHorizontal: 9,
     paddingVertical: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.16,
-    shadowRadius: 20,
-    elevation: 5,
     overflow: "hidden",
   },
   bookShrineCoverImage: {
@@ -5585,11 +6148,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     textTransform: "uppercase",
     textAlign: "center",
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   bookShrineCopy: {
     flex: 1,
@@ -5603,11 +6162,7 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontWeight: "400",
     letterSpacing: 0,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   bookShrineBookMeta: {
     color: "rgba(31,41,51,0.55)",
@@ -5694,11 +6249,7 @@ const styles = StyleSheet.create({
     fontWeight: "400",
     letterSpacing: -0.9,
     textAlign: "center",
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   bookReturnMinutes: {
     color: "rgba(31,41,51,0.58)",
@@ -5741,11 +6292,7 @@ const styles = StyleSheet.create({
     fontWeight: "400",
     textAlign: "center",
     paddingHorizontal: 6,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   bookAttributionCopy: {
     flex: 1,
@@ -5789,6 +6336,24 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: "600",
     marginTop: 8,
+  },
+  bookAttributionSaveButton: {
+    backgroundColor: colors.accentDark,
+    borderRadius: 999,
+    paddingVertical: 15,
+    alignItems: "center",
+    marginTop: 14,
+    shadowColor: "#315F52",
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  bookAttributionSaveButtonText: {
+    color: "#FFF8ED",
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: "700",
   },
   bookLookupPanel: {
     marginTop: 14,
@@ -5858,11 +6423,7 @@ const styles = StyleSheet.create({
     color: colors.accent,
     fontSize: 14,
     lineHeight: 19,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   bookLookupCopy: {
     flex: 1,
@@ -6084,11 +6645,11 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "center",
     backgroundColor: "transparent",
-    paddingVertical: 28,
+    paddingVertical: 10,
   },
   bookRevealFooter: {
     backgroundColor: "rgba(247,243,234,0.94)",
-    paddingTop: 12,
+    paddingTop: 6,
     borderTopWidth: 1,
     borderTopColor: "rgba(47,93,80,0.07)",
   },
@@ -6100,7 +6661,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1.4,
     textTransform: "uppercase",
     textAlign: "center",
-    marginBottom: 12,
+    marginBottom: 9,
   },
   bookRevealTitle: {
     color: "#1B2A22",
@@ -6109,12 +6670,8 @@ const styles = StyleSheet.create({
     fontWeight: "400",
     letterSpacing: -0.8,
     textAlign: "center",
-    marginBottom: 22,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    marginBottom: 10,
+    fontFamily: serifFont,
   },
   bookRevealCard: {
     flexDirection: "row",
@@ -6122,10 +6679,10 @@ const styles = StyleSheet.create({
     gap: 16,
     backgroundColor: "rgba(255,255,255,0.72)",
     borderRadius: 30,
-    padding: 18,
+    padding: 16,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
-    marginBottom: 18,
+    marginBottom: 12,
     ...cardShadow,
   },
   bookRevealCover: {
@@ -6171,11 +6728,7 @@ const styles = StyleSheet.create({
     fontSize: 21,
     lineHeight: 27,
     fontWeight: "400",
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   bookRevealMeta: {
     color: colors.mutedText,
@@ -6278,11 +6831,7 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     fontWeight: "400",
     textAlign: "center",
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   completedBookTitle: {
     color: "#F0EBE0",
@@ -6293,11 +6842,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 8,
     marginBottom: 4,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   completedBookStatsRow: {
     flexDirection: "row",
@@ -6315,20 +6860,14 @@ const styles = StyleSheet.create({
     fontSize: 20,
     lineHeight: 25,
     fontWeight: "400",
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   completedBookStatLabel: {
     color: "rgba(240,235,224,0.4)",
-    fontSize: 9,
+    fontSize: 8,
     lineHeight: 13,
     fontWeight: "800",
     marginTop: 4,
-    textTransform: "uppercase",
-    letterSpacing: 0.9,
     textAlign: "center",
   },
   completedBookStatDivider: {
@@ -6343,11 +6882,7 @@ const styles = StyleSheet.create({
     fontWeight: "400",
     textAlign: "center",
     marginBottom: 4,
-    fontFamily: Platform.select({
-      ios: "Georgia",
-      android: "serif",
-      default: "serif",
-    }),
+    fontFamily: serifFont,
   },
   completedBookSubline: {
     color: "rgba(240,235,224,0.5)",
