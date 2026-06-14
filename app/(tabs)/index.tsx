@@ -4,6 +4,7 @@ import * as Haptics from "expo-haptics";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useRef, useState } from "react";
 import {
+  Alert,
   Animated,
   AppState,
   AppStateStatus,
@@ -198,7 +199,7 @@ function getSanctuaryRevealCopy(stage: number, stageChanged: boolean) {
   if (stage === 1) {
     return {
       title: "This book has a place here.",
-      subtitle: "Your reading life has a little more shape now.",
+      subtitle: "A little more of this book is kept here now.",
       ctaText: "Return home",
     };
   }
@@ -470,6 +471,8 @@ export default function HomeScreen() {
   const [ritualLineText, setRitualLineText] = useState(readingRitualLines[0]);
   const [manualLogNote, setManualLogNote] = useState("");
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [bookTitleFocused, setBookTitleFocused] = useState(false);
+  const [hasUserEditedBookQuery, setHasUserEditedBookQuery] = useState(false);
   const [manualBookTitleFocused, setManualBookTitleFocused] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -488,9 +491,11 @@ export default function HomeScreen() {
   const revealTranslateY = useRef(new Animated.Value(18)).current;
   const revealSceneScale = useRef(new Animated.Value(0.98)).current;
   const bookTitleInputRef = useRef<TextInput | null>(null);
+  const bookInputScrollRef = useRef<ScrollView | null>(null);
   const manualLogScrollRef = useRef<ScrollView | null>(null);
   const manualBookTitleInputRef = useRef<TextInput | null>(null);
   const bookLookupRequestId = useRef(0);
+  const lastAutoScrolledBookLookupQuery = useRef<string | null>(null);
   const manualBookLookupRequestId = useRef(0);
   const manualBookLookupTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -583,12 +588,29 @@ export default function HomeScreen() {
       setIsBookLookupRequested(false);
       setHasBookLookupSearched(false);
       setBookLookupError(false);
+      setHasUserEditedBookQuery(false);
       return;
     }
 
     const trimmedQuery = bookTitle.trim();
 
-    if (!isBookLookupRequested || trimmedQuery.length < 3) {
+    if (
+      selectedBookMetadata &&
+      trimmedQuery === selectedBookMetadata.title.trim()
+    ) {
+      bookLookupRequestId.current += 1;
+      setBookLookupResults([]);
+      setIsBookLookupLoading(false);
+      setHasBookLookupSearched(false);
+      setBookLookupError(false);
+      return;
+    }
+
+    if (
+      !hasUserEditedBookQuery ||
+      !isBookLookupRequested ||
+      trimmedQuery.length < 3
+    ) {
       bookLookupRequestId.current += 1;
       setBookLookupResults([]);
       setIsBookLookupLoading(false);
@@ -656,7 +678,56 @@ export default function HomeScreen() {
     return () => {
       clearTimeout(lookupTimer);
     };
-  }, [bookTitle, isBookLookupRequested, screen]);
+  }, [
+    bookTitle,
+    hasUserEditedBookQuery,
+    isBookLookupRequested,
+    screen,
+    selectedBookMetadata,
+  ]);
+
+  useEffect(() => {
+    if (
+      screen !== "bookInput" ||
+      !bookTitleFocused ||
+      !hasUserEditedBookQuery ||
+      selectedBookMetadata ||
+      bookLookupResults.length === 0
+    ) {
+      return;
+    }
+
+    const trimmedQuery = bookTitle.trim();
+    if (
+      trimmedQuery.length < 3 ||
+      lastAutoScrolledBookLookupQuery.current === trimmedQuery
+    ) {
+      return;
+    }
+
+    lastAutoScrolledBookLookupQuery.current = trimmedQuery;
+
+    const scrollTimer = setTimeout(() => {
+      requestAnimationFrame(() => {
+        bookInputScrollRef.current?.scrollTo({
+          y: 260,
+          animated: true,
+        });
+      });
+    }, isKeyboardVisible ? 90 : 140);
+
+    return () => {
+      clearTimeout(scrollTimer);
+    };
+  }, [
+    bookLookupResults.length,
+    bookTitle,
+    bookTitleFocused,
+    hasUserEditedBookQuery,
+    isKeyboardVisible,
+    screen,
+    selectedBookMetadata,
+  ]);
 
   useEffect(() => {
     if (screen !== "ritual") return;
@@ -943,19 +1014,25 @@ export default function HomeScreen() {
         if (savedSessions !== null) {
           const parsedSessions: ReadingSession[] = JSON.parse(savedSessions);
           let shouldPersistMigratedSessions = false;
-          const migratedSessions = parsedSessions.map((session) => {
+          const migratedSessions = parsedSessions.map((session, index) => {
             const normalizedSession = normalizeBookMetadataFields(session);
+            const idSafeSession = normalizedSession.id
+              ? normalizedSession
+              : {
+                  ...normalizedSession,
+                  id: `legacy-${index}-${getSessionDateValue(normalizedSession)}`,
+                };
             const titleSafeSession =
-              normalizedSession.title === LEGACY_UNATTACHED_SESSION_TITLE
-                ? { ...normalizedSession, title: UNATTACHED_SESSION_TITLE }
-                : normalizedSession;
+              idSafeSession.title === LEGACY_UNATTACHED_SESSION_TITLE
+                ? { ...idSafeSession, title: UNATTACHED_SESSION_TITLE }
+                : idSafeSession;
 
             if (session.note && !session.reflection) {
               shouldPersistMigratedSessions = true;
               return { ...titleSafeSession, reflection: session.note };
             }
 
-            if (titleSafeSession !== session) {
+            if (titleSafeSession !== session || !normalizedSession.id) {
               shouldPersistMigratedSessions = true;
             }
 
@@ -1152,6 +1229,7 @@ export default function HomeScreen() {
       setCompletedBookMoment(null);
       setSessionReflection("");
       setBookTitle(currentBookTitle);
+      setHasUserEditedBookQuery(false);
       setShowBookCompletedInput(false);
       setCompletedBookReview("");
       setIsReading(true);
@@ -1174,6 +1252,7 @@ export default function HomeScreen() {
       setPendingSessionSeconds(sessionSeconds);
       setBookTitle(currentBookTitle);
       setSelectedBookMetadata(null);
+      setHasUserEditedBookQuery(false);
       setIsBookLookupRequested(false);
       setSessionMessage(`+${sessionDuration} added`);
       setIsReading(false);
@@ -1193,19 +1272,23 @@ export default function HomeScreen() {
   };
 
   const handleBookTitleChange = (nextTitle: string) => {
+    setHasUserEditedBookQuery(true);
     setIsBookLookupRequested(true);
     setBookTitle(nextTitle);
 
     if (selectedBookMetadata && nextTitle.trim() !== selectedBookMetadata.title) {
       setSelectedBookMetadata(null);
+      lastAutoScrolledBookLookupQuery.current = null;
     }
   };
 
   const clearBookTitleSelection = () => {
     bookLookupRequestId.current += 1;
+    setHasUserEditedBookQuery(true);
     setIsBookLookupRequested(true);
     setBookTitle("");
     setSelectedBookMetadata(null);
+    lastAutoScrolledBookLookupQuery.current = null;
     setBookLookupResults([]);
     setIsBookLookupLoading(false);
     setHasBookLookupSearched(false);
@@ -1214,12 +1297,27 @@ export default function HomeScreen() {
   };
 
   const selectGoogleBook = (book: BookMetadata) => {
-    setIsBookLookupRequested(true);
+    Keyboard.dismiss();
+    bookLookupRequestId.current += 1;
+    setHasUserEditedBookQuery(false);
+    setIsBookLookupRequested(false);
     setSelectedBookMetadata({
       ...book,
       coverUrl: normalizeStoredCoverUrl(book.coverUrl),
     });
     setBookTitle(book.title);
+    setBookLookupResults([]);
+    setIsBookLookupLoading(false);
+    setHasBookLookupSearched(false);
+    setBookLookupError(false);
+    lastAutoScrolledBookLookupQuery.current = book.title.trim();
+
+    setTimeout(() => {
+      bookInputScrollRef.current?.scrollTo({
+        y: 0,
+        animated: true,
+      });
+    }, 80);
   };
 
   const resetManualBookLookup = () => {
@@ -1490,6 +1588,7 @@ export default function HomeScreen() {
 
     setShowBookCompletedInput(false);
     setSelectedBookMetadata(null);
+    setHasUserEditedBookQuery(false);
     setBookLookupResults([]);
     setBookLookupError(false);
     setScreen(shouldCompleteBook ? "completedBook" : "reveal");
@@ -1506,6 +1605,7 @@ export default function HomeScreen() {
     setShowBookCompletedInput(false);
     setCompletedBookReview("");
     setSelectedBookMetadata(null);
+    setHasUserEditedBookQuery(false);
     setBookLookupResults([]);
     setBookLookupError(false);
     setScreen("reveal");
@@ -1513,6 +1613,88 @@ export default function HomeScreen() {
     setTimeout(() => {
       setSessionMessage(null);
     }, 3000);
+  };
+
+  const deleteReadingSession = async (sessionId: string) => {
+    const sessionToDelete = recentSessions.find(
+      (session) => session.id === sessionId,
+    );
+
+    if (!sessionToDelete) return;
+
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    const updatedSessions = recentSessions.filter(
+      (session) => session.id !== sessionId,
+    );
+    const deletedSeconds = Math.max(
+      0,
+      Math.round(Number(sessionToDelete.minutes || 0) * 60),
+    );
+    const updatedLifetimeSeconds = Math.max(
+      0,
+      lifetimeSeconds - deletedSeconds,
+    );
+    const sessionTimestamp = getSessionDateValue(sessionToDelete);
+    const sessionDate =
+      sessionTimestamp > 0 ? new Date(sessionTimestamp) : null;
+    const todayDateString = getTodayDateString();
+    const deletedToday =
+      sessionDate?.toISOString().split("T")[0] === todayDateString;
+    const updatedTodaySeconds = deletedToday
+      ? Math.max(0, seconds - deletedSeconds)
+      : seconds;
+    const updatedTotalCompletedSessions = updatedSessions.length;
+
+    setRecentSessions(updatedSessions);
+    setTotalCompletedSessions(updatedTotalCompletedSessions);
+    setLifetimeSeconds(updatedLifetimeSeconds);
+
+    if (deletedToday) {
+      setSeconds(updatedTodaySeconds);
+      setLastReadDate(todayDateString);
+    }
+
+    const storageUpdates: [string, string][] = [
+      [SESSIONS_KEY, JSON.stringify(updatedSessions)],
+      [
+        TOTAL_COMPLETED_SESSIONS_KEY,
+        String(updatedTotalCompletedSessions),
+      ],
+      [LIFETIME_SECONDS_KEY, String(updatedLifetimeSeconds)],
+      [SECONDS_KEY, String(updatedTodaySeconds)],
+    ];
+
+    if (deletedToday) {
+      storageUpdates.push([DATE_KEY, todayDateString]);
+    }
+
+    await AsyncStorage.multiSet(storageUpdates);
+
+    setSessionMessage("Reading moment deleted");
+    setTimeout(() => {
+      setSessionMessage(null);
+    }, 3000);
+  };
+
+  const confirmDeleteReadingSession = (sessionId: string) => {
+    Alert.alert(
+      "Delete this reading moment?",
+      "This removes it from your diary. Your book itself will stay.",
+      [
+        {
+          text: "Keep it",
+          style: "cancel",
+        },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            void deleteReadingSession(sessionId);
+          },
+        },
+      ],
+    );
   };
 
   const saveCompletedBookReview = async (
@@ -1761,6 +1943,7 @@ export default function HomeScreen() {
     .filter((session) => !isUnattachedSessionTitle(session.title))
     .slice(0, 3);
   const latestSession = recentSessions[0];
+  const hasReadingMoments = recentSessions.length > 0;
   const currentBookSession = currentBookTitle
     ? recentSessions.find(
         (session) =>
@@ -1773,14 +1956,22 @@ export default function HomeScreen() {
   );
   const currentBookDisplayTitle =
     currentBookTitle ||
-    (latestSession ? getDisplaySessionTitle(latestSession.title) : "Your next book");
-  const currentBookIsReadingMoment =
-    !currentBookTitle && isUnattachedSessionTitle(latestSession?.title);
+    (latestSession
+      ? getDisplaySessionTitle(latestSession.title)
+      : "A quiet place to begin.");
+  const currentBookSubcopy = hasReadingMoments
+    ? "Pick up where you left off."
+    : "Your first reading moment can begin whenever you're ready.";
   const currentBookMeta = currentBookTitle
     ? latestSession?.title === currentBookTitle
       ? `Last read ${formatCurrentBookTimestamp(latestSession.createdAt)}`
       : "Saved as your current book"
-    : "Save a reading moment to place a book here";
+    : hasReadingMoments
+      ? "Save a reading moment to place a book here"
+      : "Start when you're ready, then save the book you read.";
+  const shouldShowCurrentBookPlaceholderMark =
+    !currentBookTitle &&
+    (!latestSession || isUnattachedSessionTitle(latestSession.title));
   const currentBookLastSession = currentBookTitle ? currentBookSession : null;
   const currentBookLastSessionNote = currentBookLastSession
     ? getSessionNote(currentBookLastSession)
@@ -1830,8 +2021,8 @@ export default function HomeScreen() {
         style={[
           styles.welcomeScreen,
           {
-            paddingTop: insets.top + 28,
-            paddingBottom: Math.max(insets.bottom + 24, 42),
+            paddingTop: insets.top + 18,
+            paddingBottom: Math.max(insets.bottom + 18, 28),
           },
         ]}
       >
@@ -1844,33 +2035,29 @@ export default function HomeScreen() {
         >
         <View style={styles.welcomeCard}>
           <View style={styles.welcomeSanctuaryPreview}>
-            <View style={styles.welcomeWindowGlow} />
-            <View style={styles.welcomeWindowFrame} />
-            <View style={styles.welcomeWindowDivider} />
-            <View style={styles.welcomeFloor} />
-            <View style={styles.welcomeChair} />
-            <View style={styles.welcomeBookStack}>
-              <View style={styles.welcomeBookOne} />
-              <View style={styles.welcomeBookTwo} />
-              <View style={styles.welcomeBookThree} />
+            <View style={styles.welcomeLampGlow} />
+            <View style={styles.welcomeReadingSurface} />
+            <View style={styles.welcomeMug} />
+            <View style={styles.welcomeMugHandle} />
+            <View style={styles.welcomeStillLifeBook}>
+              <View style={styles.welcomeBookCover} />
+              <View style={styles.welcomeBookSpine} />
+              <View style={styles.welcomeBookPageEdge} />
             </View>
-            <View style={styles.welcomePlantPot} />
-            <View style={[styles.welcomeLeaf, styles.welcomeLeafOne]} />
-            <View style={[styles.welcomeLeaf, styles.welcomeLeafTwo]} />
           </View>
 
-          <ThemedText style={styles.welcomeEyebrow}>Welcome to Rousd</ThemedText>
+          <ThemedText style={styles.welcomeEyebrow}>WELCOME TO ROUSD</ThemedText>
           <ThemedText style={styles.welcomeTitle}>
             Keep a light on for your reading life.
           </ThemedText>
           <ThemedText style={styles.welcomeBody}>
-            Start reading, open your book or e-reader, then put your phone down. Rousd keeps time and helps you save the book you read.
+            {"Start a quiet reading moment, put your phone down, then return when you're done. Rousd keeps the time and helps you save the book, note, or moment you want to remember."}
           </ThemedText>
 
           <View style={styles.welcomeStepsCard}>
             <View style={styles.welcomeStepRow}>
               <ThemedText style={styles.welcomeStepNumber}>1</ThemedText>
-              <ThemedText style={styles.welcomeStepText}>Start reading</ThemedText>
+              <ThemedText style={styles.welcomeStepText}>Press the Start reading button</ThemedText>
             </View>
             <View style={styles.welcomeStepRow}>
               <ThemedText style={styles.welcomeStepNumber}>2</ThemedText>
@@ -1878,7 +2065,7 @@ export default function HomeScreen() {
             </View>
             <View style={styles.welcomeStepRow}>
               <ThemedText style={styles.welcomeStepNumber}>3</ThemedText>
-              <ThemedText style={styles.welcomeStepText}>Return and save the book you read</ThemedText>
+              <ThemedText style={styles.welcomeStepText}>Return and save what you read</ThemedText>
             </View>
           </View>
 
@@ -2059,6 +2246,8 @@ export default function HomeScreen() {
       const canCompleteBook = Boolean(getValidBookTitle(bookTitle));
       const bookLookupQueryIsReady = bookTitle.trim().length >= 3;
       const shouldShowBookLookup =
+        !selectedBookMetadata &&
+        hasUserEditedBookQuery &&
         bookLookupQueryIsReady &&
         (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
       const knownBookMetadata = getValidBookTitle(bookTitle)
@@ -2087,6 +2276,7 @@ export default function HomeScreen() {
           style={{ flex: 1 }}
         >
         <ScrollView
+          ref={bookInputScrollRef}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
           contentContainerStyle={[
@@ -2128,7 +2318,13 @@ export default function HomeScreen() {
                   placeholderTextColor="rgba(31,41,51,0.38)"
                   value={bookTitle}
                   onChangeText={handleBookTitleChange}
-                  onFocus={() => setIsBookLookupRequested(true)}
+                  onFocus={() => {
+                    setBookTitleFocused(true);
+                    if (hasUserEditedBookQuery) {
+                      setIsBookLookupRequested(true);
+                    }
+                  }}
+                  onBlur={() => setBookTitleFocused(false)}
                   style={styles.bookAttributionInput}
                   returnKeyType="done"
                   blurOnSubmit
@@ -2185,6 +2381,53 @@ export default function HomeScreen() {
             </Pressable>
           ) : null}
 
+          <View style={styles.bookCompletedCard}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.bookCompletedToggle,
+                showBookCompletedInput && styles.bookCompletedToggleSelected,
+                !canCompleteBook && { opacity: 0.4 },
+                pressed && styles.buttonPressed,
+              ]}
+              disabled={!canCompleteBook}
+              onPress={() => {
+                setShowBookCompletedInput((value) => !value);
+                if (showBookCompletedInput) {
+                  setCompletedBookReview("");
+                }
+              }}
+            >
+              <View style={styles.bookCompletedToggleCopy}>
+                <ThemedText style={styles.bookCompletedLabel}>
+                  Finished this book?
+                </ThemedText>
+                <ThemedText style={styles.bookCompletedSubtext}>
+                  If this was the last page, you can close it gently.
+                </ThemedText>
+              </View>
+              <View
+                style={[
+                  styles.bookCompletedSwitchTrack,
+                  showBookCompletedInput &&
+                    styles.bookCompletedSwitchTrackSelected,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.bookCompletedSwitchKnob,
+                    showBookCompletedInput &&
+                      styles.bookCompletedSwitchKnobSelected,
+                  ]}
+                />
+              </View>
+            </Pressable>
+            {!canCompleteBook ? (
+              <ThemedText style={styles.bookCompletedDisabledHelper}>
+                Name the book first, then you can mark it finished.
+              </ThemedText>
+            ) : null}
+          </View>
+
           {shouldShowBookLookup ? (
             <View style={styles.bookLookupPanel}>
               <View style={styles.bookLookupHeaderRow}>
@@ -2204,15 +2447,11 @@ export default function HomeScreen() {
               ) : null}
 
               {bookLookupResults.map((book) => {
-                const isSelected =
-                  selectedBookMetadata?.googleBooksId === book.googleBooksId;
-
                 return (
                   <Pressable
                     key={book.googleBooksId ?? book.title}
                     style={({ pressed }) => [
                       styles.bookLookupChoice,
-                      isSelected && styles.bookLookupChoiceSelected,
                       pressed && styles.buttonPressed,
                     ]}
                     onPress={() => selectGoogleBook(book)}
@@ -2237,11 +2476,6 @@ export default function HomeScreen() {
                         >
                           {book.title}
                         </ThemedText>
-                        {isSelected ? (
-                          <ThemedText style={styles.bookLookupSelectedLabel}>
-                            Selected
-                          </ThemedText>
-                        ) : null}
                       </View>
                       {book.author ? (
                         <ThemedText
@@ -2262,7 +2496,7 @@ export default function HomeScreen() {
                 <ThemedText style={styles.bookLookupEmptyText}>
                   {bookLookupError
                     ? "Couldn't check matches right now. You can still save this title."
-                    : "No matches found. You can still save this title."}
+                    : "No matches yet. You can still save this title."}
                 </ThemedText>
               ) : null}
 
@@ -2311,53 +2545,6 @@ export default function HomeScreen() {
               ))}
             </View>
           )}
-
-          <View style={styles.bookCompletedCard}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.bookCompletedToggle,
-                showBookCompletedInput && styles.bookCompletedToggleSelected,
-                !canCompleteBook && { opacity: 0.4 },
-                pressed && styles.buttonPressed,
-              ]}
-              disabled={!canCompleteBook}
-              onPress={() => {
-                setShowBookCompletedInput((value) => !value);
-                if (showBookCompletedInput) {
-                  setCompletedBookReview("");
-                }
-              }}
-            >
-              <View style={styles.bookCompletedToggleCopy}>
-                <ThemedText style={styles.bookCompletedLabel}>
-                  Finished this book?
-                </ThemedText>
-                <ThemedText style={styles.bookCompletedSubtext}>
-                  If this was the last page, you can mark it finished.
-                </ThemedText>
-              </View>
-              <View
-                style={[
-                  styles.bookCompletedSwitchTrack,
-                  showBookCompletedInput &&
-                    styles.bookCompletedSwitchTrackSelected,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.bookCompletedSwitchKnob,
-                    showBookCompletedInput &&
-                      styles.bookCompletedSwitchKnobSelected,
-                  ]}
-                />
-              </View>
-            </Pressable>
-            {!canCompleteBook ? (
-              <ThemedText style={styles.bookCompletedDisabledHelper}>
-                Name the book first, then you can mark it finished.
-              </ThemedText>
-            ) : null}
-          </View>
 
           <View style={styles.closeButtonRow}>
             <Pressable
@@ -2515,7 +2702,7 @@ export default function HomeScreen() {
           >
             <TextInput
               ref={manualBookTitleInputRef}
-              placeholder="Book title"
+              placeholder="Book title (optional)"
               placeholderTextColor="rgba(255,255,255,0.45)"
               value={manualLogBookTitle}
               onChangeText={handleManualBookTitleChange}
@@ -2557,6 +2744,10 @@ export default function HomeScreen() {
           ) : manualKnownBookMetadata ? (
             <ThemedText style={styles.manualBookMetadataHint}>
               Saved book found
+            </ThemedText>
+          ) : manualLogBookTitle.trim().length === 0 ? (
+            <ThemedText style={styles.manualBookMetadataHint}>
+              You can save this as a reading moment.
             </ThemedText>
           ) : null}
 
@@ -2639,7 +2830,7 @@ export default function HomeScreen() {
                 <ThemedText style={styles.manualBookLookupEmptyText}>
                   {manualBookLookupError
                     ? "Couldn't check matches right now. You can still save this title."
-                    : "No matches found. You can still save this title."}
+                    : "No matches yet. You can still save this title."}
                 </ThemedText>
               ) : null}
             </View>
@@ -3141,7 +3332,10 @@ export default function HomeScreen() {
             {diarySessions.length === 0 ? (
               <View style={styles.diaryEmptyCard}>
                 <ThemedText style={styles.diaryEmptyText}>
-                  Your first reading moment will appear here.
+                  No notes yet.
+                </ThemedText>
+                <ThemedText style={styles.diaryEmptySubtext}>
+                  {"After a reading moment, you can leave a note here if you'd like."}
                 </ThemedText>
               </View>
             ) : (
@@ -3206,6 +3400,22 @@ export default function HomeScreen() {
                           <ThemedText style={styles.diaryDuration}>
                             {formatDuration(Number(session.minutes))}
                           </ThemedText>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Delete this reading moment"
+                            hitSlop={8}
+                            style={({ pressed }) => [
+                              styles.diaryDeleteButton,
+                              pressed && styles.buttonPressed,
+                            ]}
+                            onPress={() => confirmDeleteReadingSession(session.id)}
+                          >
+                            <Ionicons
+                              name="trash-outline"
+                              size={16}
+                              color="rgba(180,83,58,0.62)"
+                            />
+                          </Pressable>
                         </View>
 
                         {sessionReflection ? (
@@ -3258,7 +3468,10 @@ export default function HomeScreen() {
             {completedBooks.length === 0 ? (
               <View style={styles.diaryEmptyCard}>
                 <ThemedText style={styles.diaryEmptyText}>
-                  Finished books will gather here.
+                  Your shelf is waiting.
+                </ThemedText>
+                <ThemedText style={styles.diaryEmptySubtext}>
+                  Books you finish will rest here.
                 </ThemedText>
               </View>
             ) : (
@@ -3672,7 +3885,7 @@ export default function HomeScreen() {
                     resizeMode="cover"
                   />
                 ) : (
-                  currentBookIsReadingMoment ? (
+                  shouldShowCurrentBookPlaceholderMark ? (
                     <ThemedText style={styles.readingMomentCoverMarkHero}>
                       R
                     </ThemedText>
@@ -3694,7 +3907,7 @@ export default function HomeScreen() {
                 {currentBookDisplayTitle}
               </ThemedText>
               <ThemedText style={styles.bookShrineSubcopy}>
-                Pick up where you left off.
+                {currentBookSubcopy}
               </ThemedText>
               <ThemedText style={styles.bookShrineBookMeta}>
                 {currentBookMeta}
@@ -3844,7 +4057,7 @@ export default function HomeScreen() {
         <ThemedView style={styles.sessionsCard}>
           {recentSessions.length === 0 ? (
             <ThemedText style={styles.emptySessionsText}>
-              {"When you spend time with a book, it can rest here."}
+              Your reading moments will gather here.
             </ThemedText>
           ) : (
             visibleSessions.slice(0, 1).map((session, index) => {
@@ -4078,7 +4291,7 @@ const styles = StyleSheet.create({
   welcomeScreen: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingHorizontal: 24,
+    paddingHorizontal: 22,
     paddingTop: 72,
     paddingBottom: 42,
     justifyContent: "flex-start",
@@ -4086,7 +4299,7 @@ const styles = StyleSheet.create({
   },
   welcomeContent: {
     flexGrow: 1,
-    justifyContent: "flex-start",
+    justifyContent: "center",
     backgroundColor: "transparent",
   },
   welcomeGlowTop: {
@@ -4109,149 +4322,127 @@ const styles = StyleSheet.create({
   },
   welcomeCard: {
     backgroundColor: "rgba(255,255,255,0.72)",
-    borderRadius: 34,
-    padding: 22,
+    borderRadius: 30,
+    padding: 18,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
     ...cardShadow,
   },
   welcomeSanctuaryPreview: {
-    height: 184,
-    borderRadius: 28,
+    height: 126,
+    borderRadius: 24,
     backgroundColor: "#163D31",
     overflow: "hidden",
-    marginBottom: 24,
+    marginBottom: 18,
     borderWidth: 1,
     borderColor: "rgba(23,56,38,0.10)",
   },
-  welcomeWindowGlow: {
+  welcomeLampGlow: {
     position: "absolute",
-    top: 24,
-    left: 58,
-    right: 58,
-    height: 92,
-    borderRadius: 54,
-    backgroundColor: "rgba(247,195,107,0.56)",
-  },
-  welcomeWindowFrame: {
-    position: "absolute",
-    top: 32,
-    left: 76,
-    right: 76,
-    height: 88,
-    borderRadius: 48,
-    borderWidth: 2,
-    borderColor: "rgba(255,248,237,0.36)",
-  },
-  welcomeWindowDivider: {
-    position: "absolute",
-    top: 40,
+    top: -28,
     alignSelf: "center",
-    width: 2,
-    height: 76,
-    borderRadius: 1,
-    backgroundColor: "rgba(255,248,237,0.32)",
+    width: 162,
+    height: 118,
+    borderRadius: 82,
+    backgroundColor: "rgba(247,195,107,0.30)",
   },
-  welcomeFloor: {
+  welcomeReadingSurface: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
-    height: 60,
-    backgroundColor: "rgba(184,144,104,0.58)",
+    height: 38,
+    backgroundColor: "rgba(184,144,104,0.52)",
   },
-  welcomeChair: {
+  welcomeMug: {
     position: "absolute",
-    left: 54,
-    bottom: 42,
-    width: 70,
-    height: 62,
-    borderRadius: 22,
-    backgroundColor: "rgba(106,70,59,0.74)",
+    right: 66,
+    bottom: 36,
+    width: 27,
+    height: 24,
+    borderRadius: 9,
+    backgroundColor: "rgba(255,248,237,0.34)",
   },
-  welcomeBookStack: {
+  welcomeMugHandle: {
     position: "absolute",
-    left: 128,
-    bottom: 48,
-    gap: 3,
+    right: 57,
+    bottom: 41,
+    width: 13,
+    height: 14,
+    borderRadius: 7,
+    borderWidth: 2,
+    borderColor: "rgba(255,248,237,0.28)",
   },
-  welcomeBookOne: {
-    width: 38,
-    height: 7,
-    borderRadius: 3,
-    backgroundColor: "rgba(247,195,107,0.72)",
-  },
-  welcomeBookTwo: {
-    width: 32,
-    height: 7,
-    borderRadius: 3,
-    backgroundColor: "rgba(201,133,104,0.66)",
-  },
-  welcomeBookThree: {
-    width: 42,
-    height: 7,
-    borderRadius: 3,
-    backgroundColor: "rgba(255,248,237,0.70)",
-  },
-  welcomePlantPot: {
+  welcomeStillLifeBook: {
     position: "absolute",
-    right: 72,
-    bottom: 42,
-    width: 34,
-    height: 26,
-    borderRadius: 10,
-    backgroundColor: "rgba(201,133,104,0.68)",
+    alignSelf: "center",
+    bottom: 37,
+    width: 126,
+    height: 38,
+    borderRadius: 7,
+    backgroundColor: "transparent",
   },
-  welcomeLeaf: {
+  welcomeBookCover: {
     position: "absolute",
-    width: 28,
-    height: 42,
-    borderRadius: 20,
-    backgroundColor: "rgba(116,138,93,0.62)",
+    left: 0,
+    right: 0,
+    top: 0,
+    bottom: 5,
+    borderRadius: 8,
+    backgroundColor: "rgba(255,248,237,0.78)",
   },
-  welcomeLeafOne: {
-    right: 84,
-    bottom: 64,
-    transform: [{ rotate: "-24deg" }],
+  welcomeBookSpine: {
+    position: "absolute",
+    left: 13,
+    top: 0,
+    bottom: 5,
+    width: 8,
+    borderTopLeftRadius: 8,
+    borderBottomLeftRadius: 8,
+    backgroundColor: "rgba(47,93,80,0.28)",
   },
-  welcomeLeafTwo: {
-    right: 62,
-    bottom: 68,
-    backgroundColor: "rgba(95,117,77,0.58)",
-    transform: [{ rotate: "24deg" }],
+  welcomeBookPageEdge: {
+    position: "absolute",
+    left: 8,
+    right: 8,
+    bottom: 0,
+    height: 8,
+    borderBottomLeftRadius: 6,
+    borderBottomRightRadius: 6,
+    backgroundColor: "rgba(247,243,234,0.54)",
   },
   welcomeEyebrow: {
     color: "rgba(47,93,80,0.72)",
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: 11,
+    lineHeight: 15,
     fontWeight: "900",
     letterSpacing: 1.4,
     textTransform: "uppercase",
-    marginBottom: 10,
+    marginBottom: 8,
   },
   welcomeTitle: {
     color: "#173826",
-    fontSize: 36,
-    lineHeight: 42,
+    fontSize: 32,
+    lineHeight: 37,
     fontWeight: "400",
-    letterSpacing: -1.1,
+    letterSpacing: 0,
     fontFamily: serifFont,
   },
   welcomeBody: {
     color: "rgba(31,41,51,0.68)",
-    fontSize: 17,
-    lineHeight: 25,
+    fontSize: 15,
+    lineHeight: 22,
     fontWeight: "500",
-    marginTop: 14,
+    marginTop: 10,
   },
   welcomeStepsCard: {
     backgroundColor: "rgba(247,243,234,0.78)",
-    borderRadius: 24,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    gap: 10,
-    marginTop: 22,
-    marginBottom: 20,
+    borderRadius: 22,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    gap: 8,
+    marginTop: 16,
+    marginBottom: 16,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.06)",
   },
@@ -4276,14 +4467,14 @@ const styles = StyleSheet.create({
   welcomeStepText: {
     flex: 1,
     color: "rgba(31,41,51,0.72)",
-    fontSize: 15,
-    lineHeight: 21,
+    fontSize: 14,
+    lineHeight: 20,
     fontWeight: "700",
   },
   welcomeButton: {
     backgroundColor: colors.accent,
     borderRadius: 999,
-    paddingVertical: 16,
+    paddingVertical: 15,
     alignItems: "center",
     shadowColor: "#315F52",
     shadowOffset: { width: 0, height: 7 },
@@ -5342,6 +5533,13 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
     fontWeight: "600",
   },
+  diaryEmptySubtext: {
+    color: "rgba(31,41,51,0.52)",
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: "500",
+    marginTop: 6,
+  },
   diaryTimeline: {
     marginTop: 34,
     backgroundColor: "transparent",
@@ -5397,8 +5595,8 @@ const styles = StyleSheet.create({
   },
   readingMomentCoverMarkSmall: {
     color: "#FFF8ED",
-    fontSize: 24,
-    lineHeight: 30,
+    fontSize: 17,
+    lineHeight: 22,
     fontWeight: "900",
     textAlign: "center",
     fontFamily: serifFont,
@@ -5426,6 +5624,15 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
     fontWeight: "900",
+  },
+  diaryDeleteButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(180,83,58,0.06)",
+    marginTop: -4,
   },
   diaryReflection: {
     color: "rgba(31,41,51,0.68)",
@@ -6743,8 +6950,8 @@ const styles = StyleSheet.create({
   },
   readingMomentCoverMarkHero: {
     color: "#FFF8ED",
-    fontSize: 74,
-    lineHeight: 88,
+    fontSize: 44,
+    lineHeight: 53,
     fontWeight: "900",
     textAlign: "center",
     fontFamily: serifFont,
@@ -7334,15 +7541,15 @@ const styles = StyleSheet.create({
   },
   readingMomentCoverMarkLarge: {
     color: "#FFF8ED",
-    fontSize: 48,
-    lineHeight: 58,
+    fontSize: 34,
+    lineHeight: 41,
     fontWeight: "900",
     textAlign: "center",
     fontFamily: serifFont,
   },
   readingMomentCoverMarkCompact: {
-    fontSize: 38,
-    lineHeight: 46,
+    fontSize: 27,
+    lineHeight: 32,
   },
   bookRevealTextBlock: {
     flex: 1,
