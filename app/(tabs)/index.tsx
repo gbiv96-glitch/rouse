@@ -412,6 +412,85 @@ function normalizeBookMetadataFields<T extends BookMetadataFields>(item: T): T {
     : { ...item, coverUrl: normalizedCoverUrl };
 }
 
+function normalizeBookIdentityText(value?: string | null) {
+  return value?.trim().toLowerCase().replace(/\s+/g, " ") ?? "";
+}
+
+function normalizeBookIdentifier(value?: string | null) {
+  return value?.trim().toUpperCase().replace(/[^0-9X]/g, "") ?? "";
+}
+
+function hasReusableBookMetadata(book: BookMetadataFields) {
+  return Boolean(
+    book.googleBooksId ||
+      book.isbn13 ||
+      book.isbn10 ||
+      book.author ||
+      book.coverUrl,
+  );
+}
+
+function isSameFinishedBook(
+  first: { title: string } & BookMetadataFields,
+  second: { title: string } & BookMetadataFields,
+) {
+  const firstGoogleBooksId = first.googleBooksId?.trim();
+  const secondGoogleBooksId = second.googleBooksId?.trim();
+
+  if (firstGoogleBooksId && secondGoogleBooksId) {
+    return firstGoogleBooksId === secondGoogleBooksId;
+  }
+
+  const firstIsbns = [
+    normalizeBookIdentifier(first.isbn13),
+    normalizeBookIdentifier(first.isbn10),
+  ].filter(Boolean);
+  const secondIsbns = new Set(
+    [
+      normalizeBookIdentifier(second.isbn13),
+      normalizeBookIdentifier(second.isbn10),
+    ].filter(Boolean),
+  );
+
+  if (firstIsbns.some((isbn) => secondIsbns.has(isbn))) {
+    return true;
+  }
+
+  const firstTitle = normalizeBookIdentityText(first.title);
+  const secondTitle = normalizeBookIdentityText(second.title);
+  const firstAuthor = normalizeBookIdentityText(first.author);
+  const secondAuthor = normalizeBookIdentityText(second.author);
+
+  return Boolean(
+    firstTitle &&
+      secondTitle &&
+      firstAuthor &&
+      secondAuthor &&
+      firstTitle === secondTitle &&
+      firstAuthor === secondAuthor,
+  );
+}
+
+function mergeCompletedBookReview(
+  existingBook: CompletedBookReview,
+  incomingBook: CompletedBookReview,
+): CompletedBookReview {
+  return {
+    ...existingBook,
+    ...incomingBook,
+    id: existingBook.id,
+    review: incomingBook.review || existingBook.review,
+    author: incomingBook.author ?? existingBook.author ?? null,
+    coverUrl:
+      normalizeStoredCoverUrl(incomingBook.coverUrl) ??
+      normalizeStoredCoverUrl(existingBook.coverUrl),
+    googleBooksId: incomingBook.googleBooksId ?? existingBook.googleBooksId ?? null,
+    isbn10: incomingBook.isbn10 ?? existingBook.isbn10 ?? null,
+    isbn13: incomingBook.isbn13 ?? existingBook.isbn13 ?? null,
+    bookSource: incomingBook.bookSource ?? existingBook.bookSource,
+  };
+}
+
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const [isReading, setIsReading] = useState(false);
@@ -523,6 +602,49 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
+    const hasPendingSessionDuration =
+      Number.isFinite(pendingSessionSeconds) && pendingSessionSeconds > 0;
+
+    if (
+      (screen === "ritual" || screen === "active") &&
+      (!isReading || !activeSessionStartTime)
+    ) {
+      console.warn(
+        "Rousd reading timer screen opened without an active session; returning home.",
+      );
+      setIsReading(false);
+      setActiveSessionStartTime(null);
+      setPendingSessionSeconds(0);
+      setSessionMessage(null);
+      void AsyncStorage.multiRemove([
+        ACTIVE_SESSION_START_KEY,
+        ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
+        ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
+      ]);
+      setScreen("home");
+      return;
+    }
+
+    if (
+      (screen === "closeTransition" || screen === "bookInput") &&
+      !hasPendingSessionDuration
+    ) {
+      console.warn(
+        "Rousd post-session screen opened without pending session time; returning home.",
+      );
+      setPendingSessionSeconds(0);
+      setShowBookCompletedInput(false);
+      setCompletedBookReview("");
+      setSelectedBookMetadata(null);
+      setBookLookupResults([]);
+      setBookLookupError(false);
+      setIsBookLookupRequested(false);
+      setHasBookLookupSearched(false);
+      setHasUserEditedBookQuery(false);
+      setScreen("home");
+      return;
+    }
+
     if (screen === "completedBook" && !completedBookMoment) {
       console.warn(
         "Rousd completed-book screen opened without completedBookMoment; returning home.",
@@ -531,6 +653,14 @@ export default function HomeScreen() {
       setCompletedBookMoment(null);
       setSanctuaryReveal(null);
       setScreen("home");
+      return;
+    }
+
+    if (screen === "finishedBookDetail" && !selectedFinishedBook) {
+      console.warn(
+        "Rousd finished-book detail opened without a selected book; returning to shelf.",
+      );
+      setScreen("finishedBooks");
       return;
     }
 
@@ -546,7 +676,15 @@ export default function HomeScreen() {
       setCompletedBookMoment(null);
       setScreen("home");
     }
-  }, [completedBookMoment, sanctuaryReveal, screen]);
+  }, [
+    activeSessionStartTime,
+    completedBookMoment,
+    isReading,
+    pendingSessionSeconds,
+    sanctuaryReveal,
+    screen,
+    selectedFinishedBook,
+  ]);
 
   useEffect(() => {
     if (showBookCompletedInput && !getValidBookTitle(bookTitle)) {
@@ -1436,7 +1574,8 @@ export default function HomeScreen() {
     const normalizedTitle = title.trim().toLowerCase();
     const knownBook = [...recentSessions, ...completedBooks].find(
       (book) =>
-        book.title.trim().toLowerCase() === normalizedTitle && book.coverUrl,
+        book.title.trim().toLowerCase() === normalizedTitle &&
+        hasReusableBookMetadata(book),
     );
 
     if (!knownBook) {
@@ -1734,7 +1873,21 @@ export default function HomeScreen() {
       await AsyncStorage.setItem(SESSIONS_KEY, JSON.stringify(updatedSessions));
     }
 
-    const updatedCompletedBooks = [completedBook, ...storedCompletedBooks];
+    const existingCompletedBookIndex = storedCompletedBooks.findIndex((book) =>
+      isSameFinishedBook(book, completedBook),
+    );
+    const updatedCompletedBooks =
+      existingCompletedBookIndex >= 0
+        ? [
+            mergeCompletedBookReview(
+              storedCompletedBooks[existingCompletedBookIndex],
+              completedBook,
+            ),
+            ...storedCompletedBooks.filter(
+              (_, index) => index !== existingCompletedBookIndex,
+            ),
+          ]
+        : [completedBook, ...storedCompletedBooks];
 
     setCompletedBooks(updatedCompletedBooks);
     await AsyncStorage.setItem(
