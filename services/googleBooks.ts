@@ -5,6 +5,7 @@ const GOOGLE_BOOKS_MAX_RESULTS = 5;
 const GOOGLE_BOOKS_LOOKUP_TIMEOUT_MS = 8000;
 const googleBooksResultCache = new Map<string, BookMetadata[]>();
 let lastLookupStatus: GoogleBooksLookupStatus = "idle";
+let hasWarnedMissingGoogleBooksApiKey = false;
 
 export type GoogleBooksLookupStatus =
   | "idle"
@@ -70,19 +71,49 @@ const normalizeCoverUrl = (url?: string): string | null => {
   return url.replace(/^http:\/\//i, "https://");
 };
 
-const getBestCoverUrl = (imageLinks?: GoogleBooksImageLinks): string | null => {
+const normalizeImageLinks = (
+  imageLinks?: GoogleBooksImageLinks,
+): GoogleBooksImageLinks | undefined => {
   if (!imageLinks) {
+    return undefined;
+  }
+
+  return {
+    smallThumbnail: normalizeCoverUrl(imageLinks.smallThumbnail) ?? undefined,
+    thumbnail: normalizeCoverUrl(imageLinks.thumbnail) ?? undefined,
+    small: normalizeCoverUrl(imageLinks.small) ?? undefined,
+    medium: normalizeCoverUrl(imageLinks.medium) ?? undefined,
+    large: normalizeCoverUrl(imageLinks.large) ?? undefined,
+    extraLarge: normalizeCoverUrl(imageLinks.extraLarge) ?? undefined,
+  };
+};
+
+const getBestCoverUrl = (imageLinks?: GoogleBooksImageLinks): string | null => {
+  const normalizedImageLinks = normalizeImageLinks(imageLinks);
+
+  if (!normalizedImageLinks) {
     return null;
   }
 
-  return normalizeCoverUrl(
-    imageLinks.extraLarge ??
-      imageLinks.large ??
-      imageLinks.medium ??
-      imageLinks.thumbnail ??
-      imageLinks.small ??
-      imageLinks.smallThumbnail,
+  return (
+    normalizedImageLinks.extraLarge ??
+    normalizedImageLinks.large ??
+    normalizedImageLinks.medium ??
+    normalizedImageLinks.thumbnail ??
+    normalizedImageLinks.small ??
+    normalizedImageLinks.smallThumbnail ??
+    null
   );
+};
+
+const readResponseBodyForDebug = async (response: Response): Promise<string> => {
+  try {
+    const body = await response.text();
+    return body.length > 1200 ? `${body.slice(0, 1200)}... [truncated]` : body;
+  } catch (error) {
+    console.warn("Google Books lookup failed to read error response body", error);
+    return "[unreadable response body]";
+  }
 };
 
 const getIsbn = (
@@ -142,6 +173,14 @@ export async function searchGoogleBooks(query: string): Promise<BookMetadata[]> 
   try {
     const apiKey = process.env.EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY;
     const hasApiKey = Boolean(apiKey);
+
+    if (!hasApiKey && !hasWarnedMissingGoogleBooksApiKey) {
+      console.warn(
+        "Google Books API key is missing from this build. Check EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY in the EAS build environment.",
+      );
+      hasWarnedMissingGoogleBooksApiKey = true;
+    }
+
     // Optional public Expo key for quota management only. Do not hardcode secrets here.
     const url =
       `${GOOGLE_BOOKS_VOLUME_SEARCH_URL}?` +
@@ -150,21 +189,15 @@ export async function searchGoogleBooks(query: string): Promise<BookMetadata[]> 
       "&printType=books" +
       (apiKey ? `&key=${encodeURIComponent(apiKey)}` : "");
 
-    if (__DEV__) {
-      const debugUrl =
-        `${GOOGLE_BOOKS_VOLUME_SEARCH_URL}?` +
-        `q=${encodeURIComponent(trimmedQuery)}` +
-        `&maxResults=${GOOGLE_BOOKS_MAX_RESULTS}` +
-        "&printType=books" +
-        (hasApiKey ? "&key=[REDACTED]" : "");
-
-      console.log(`[Rousd Google Books debug] API key present: ${hasApiKey}`);
-      console.log(`[Rousd Google Books debug] request URL: ${debugUrl}`);
-    }
-
     const response = await fetchWithTimeout(url);
 
     if (!response.ok) {
+      const responseBody = await readResponseBodyForDebug(response);
+      console.warn(
+        `Google Books lookup failed with status ${response.status} ${response.statusText}`,
+        responseBody,
+      );
+
       if (response.status === 429) {
         lastLookupStatus = "rateLimited";
         console.warn("Google Books lookup rate limited; manual book entry remains available.");
@@ -172,7 +205,6 @@ export async function searchGoogleBooks(query: string): Promise<BookMetadata[]> 
       }
 
       lastLookupStatus = "error";
-      console.warn(`Google Books lookup failed with status ${response.status}`);
       return [];
     }
 
@@ -182,19 +214,6 @@ export async function searchGoogleBooks(query: string): Promise<BookMetadata[]> 
     const results = rawItems
       .map(normalizeGoogleBook)
       .filter((book): book is BookMetadata => book !== null);
-
-    if (__DEV__) {
-      const firstSkippedItem = rawItems.find((item) => getGoogleBookSkipReason(item));
-      const firstSkipReason = firstSkippedItem
-        ? getGoogleBookSkipReason(firstSkippedItem)
-        : null;
-
-      if (firstSkipReason) {
-        console.log(
-          `[Rousd Google Books debug] first skipped item: ${firstSkipReason}`,
-        );
-      }
-    }
 
     googleBooksResultCache.set(normalizedQuery, results);
     lastLookupStatus = results.length > 0 ? "ok" : "empty";
