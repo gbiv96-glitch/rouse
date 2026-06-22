@@ -106,6 +106,15 @@ type Screen =
 
 type LibraryReturnTarget = "home" | "menu";
 
+type SavingAction =
+  | "bookInput"
+  | "bookInputSkip"
+  | "manualLog"
+  | "revealNote"
+  | "completedBookSave"
+  | "completedBookSkip"
+  | null;
+
 type SanctuaryStage = {
   stage: number;
   title: string;
@@ -249,14 +258,14 @@ function formatSessionTimestamp(createdAt?: string, fallbackDate?: string) {
   });
 
   if (sessionDate.toDateString() === today.toDateString()) {
-    return `Today · ${time}`;
+    return `Today - ${time}`;
   }
 
   if (sessionDate.toDateString() === yesterday.toDateString()) {
-    return `Yesterday · ${time}`;
+    return `Yesterday - ${time}`;
   }
 
-  return `${sessionDate.toLocaleDateString()} · ${time}`;
+  return `${sessionDate.toLocaleDateString()} - ${time}`;
 }
 
 function formatRecentReadingTimestamp(createdAt?: string) {
@@ -401,15 +410,230 @@ function normalizeStoredCoverUrl(coverUrl?: string | null) {
   return coverUrl?.replace(/^http:\/\//i, "https://") ?? null;
 }
 
-function normalizeBookMetadataFields<T extends BookMetadataFields>(item: T): T {
-  if (!item.coverUrl) {
-    return item;
+function warnInDev(message: string, error?: unknown) {
+  if (!__DEV__) return;
+
+  if (error) {
+    console.warn(message, error);
+  } else {
+    console.warn(message);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function coerceString(value: unknown) {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return "";
+}
+
+function coerceNullableString(value: unknown) {
+  const stringValue = coerceString(value).trim();
+  return stringValue ? stringValue : null;
+}
+
+function coerceAuthor(value: unknown) {
+  if (Array.isArray(value)) {
+    const author = value.map(coerceString).filter(Boolean).join(", ").trim();
+    return author || null;
   }
 
-  const normalizedCoverUrl = normalizeStoredCoverUrl(item.coverUrl);
-  return normalizedCoverUrl === item.coverUrl
-    ? item
-    : { ...item, coverUrl: normalizedCoverUrl };
+  return coerceNullableString(value);
+}
+
+function coerceMinutesString(value: unknown) {
+  const numericValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value.replace(",", "."))
+        : 0;
+
+  return Number.isFinite(numericValue) && numericValue > 0
+    ? numericValue.toFixed(1)
+    : "0.0";
+}
+
+function getFiniteStoredNumber(value: string | null | undefined, fallback: number) {
+  if (value === null || value === undefined) return fallback;
+
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
+function coerceSessionCount(value: unknown) {
+  const numericValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number(value)
+        : 1;
+
+  return Number.isFinite(numericValue) && numericValue > 0
+    ? Math.max(1, Math.round(numericValue))
+    : 1;
+}
+
+function coerceIsoDate(value: unknown, fallback = new Date().toISOString()) {
+  const stringValue = coerceString(value);
+  const timestamp = stringValue ? new Date(stringValue).getTime() : Number.NaN;
+
+  return Number.isFinite(timestamp)
+    ? new Date(timestamp).toISOString()
+    : fallback;
+}
+
+function coerceBookSource(value: unknown): BookMetadata["source"] | undefined {
+  return value === "manual" || value === "googleBooks" ? value : undefined;
+}
+
+function getSanitizedBookMetadataFields(
+  item: Record<string, unknown>,
+): BookMetadataFields {
+  const coverUrl = normalizeStoredCoverUrl(coerceNullableString(item.coverUrl));
+
+  return {
+    author: coerceAuthor(item.author ?? item.authors),
+    coverUrl,
+    googleBooksId: coerceNullableString(item.googleBooksId),
+    isbn10: coerceNullableString(item.isbn10),
+    isbn13: coerceNullableString(item.isbn13),
+    bookSource: coerceBookSource(item.bookSource ?? item.source),
+  };
+}
+
+function sanitizeReadingSession(
+  value: unknown,
+  index: number,
+): ReadingSession | null {
+  if (!isRecord(value)) return null;
+
+  const rawTitle = coerceString(value.title).trim();
+  const rawId = coerceString(value.id).trim();
+  const rawReflection = coerceString(value.reflection || value.note);
+  const rawNote = coerceString(value.note);
+  const rawCreatedAt = coerceString(
+    value.createdAt ?? value.date ?? value.timestamp,
+  );
+  const sessionMinutes = coerceMinutesString(value.minutes ?? value.duration);
+  const hasPositiveDuration = Number(sessionMinutes) > 0;
+  const hasHistorySignal = Boolean(
+    rawId ||
+      rawTitle ||
+      rawCreatedAt ||
+      rawReflection.trim() ||
+      rawNote.trim() ||
+      hasReusableBookMetadata(getSanitizedBookMetadataFields(value)),
+  );
+
+  if (!hasPositiveDuration || !hasHistorySignal) return null;
+
+  const title =
+    rawTitle === LEGACY_UNATTACHED_SESSION_TITLE
+      ? UNATTACHED_SESSION_TITLE
+      : rawTitle || UNATTACHED_SESSION_TITLE;
+  const createdAt = coerceIsoDate(
+    value.createdAt ?? value.date ?? value.timestamp,
+  );
+  const metadataFields = getSanitizedBookMetadataFields(value);
+  const source = value.source === "logged" ? "logged" : "timed";
+
+  return {
+    id: rawId || `legacy-${index}-${new Date(createdAt).getTime()}`,
+    title,
+    minutes: sessionMinutes,
+    reflection: rawReflection,
+    note: rawNote,
+    createdAt,
+    source,
+    ...metadataFields,
+  };
+}
+
+function parseReadingSessions(rawValue: string) {
+  try {
+    const parsedValue: unknown = JSON.parse(rawValue);
+
+    if (!Array.isArray(parsedValue)) {
+      if (__DEV__) {
+        warnInDev("Rousd ignored non-array readingSessions data.");
+      }
+
+      return { sessions: [], shouldPersist: true };
+    }
+
+    const sessions = parsedValue
+      .map(sanitizeReadingSession)
+      .filter((session): session is ReadingSession => session !== null);
+
+    if (__DEV__ && sessions.length !== parsedValue.length) {
+      warnInDev("Rousd skipped malformed readingSessions entries.");
+    }
+
+    return {
+      sessions,
+      shouldPersist: JSON.stringify(sessions) !== JSON.stringify(parsedValue),
+    };
+  } catch (error) {
+    if (__DEV__) {
+      warnInDev("Rousd ignored malformed readingSessions data.", error);
+    }
+
+    return { sessions: [], shouldPersist: true };
+  }
+}
+
+function sanitizeCompletedBook(
+  value: unknown,
+  index: number,
+): CompletedBookReview | null {
+  if (!isRecord(value)) return null;
+
+  const title = coerceString(value.title).trim();
+  if (!title) return null;
+
+  const rawId = coerceString(value.id).trim();
+  const completedAt = coerceIsoDate(value.completedAt ?? value.date);
+  const metadataFields = getSanitizedBookMetadataFields(value);
+  const sessionMinutes = coerceMinutesString(
+    value.sessionMinutes ?? value.minutes ?? value.duration,
+  );
+
+  return {
+    id: rawId || `legacy-completed-${index}-${new Date(completedAt).getTime()}`,
+    title,
+    review: coerceString(value.review),
+    completedAt,
+    sessionMinutes,
+    totalBookMinutes: coerceMinutesString(value.totalBookMinutes ?? sessionMinutes),
+    sessionCount: coerceSessionCount(value.sessionCount),
+    ...metadataFields,
+  };
+}
+
+function parseCompletedBooks(rawValue: string) {
+  try {
+    const parsedValue: unknown = JSON.parse(rawValue);
+
+    if (!Array.isArray(parsedValue)) {
+      return { books: [], shouldPersist: true };
+    }
+
+    const books = parsedValue
+      .map(sanitizeCompletedBook)
+      .filter((book): book is CompletedBookReview => book !== null);
+
+    return {
+      books,
+      shouldPersist: JSON.stringify(books) !== JSON.stringify(parsedValue),
+    };
+  } catch (error) {
+    warnInDev("Rousd ignored malformed completedBooks data.", error);
+    return { books: [], shouldPersist: true };
+  }
 }
 
 function normalizeBookIdentityText(value?: string | null) {
@@ -427,6 +651,42 @@ function hasReusableBookMetadata(book: BookMetadataFields) {
       book.isbn10 ||
       book.author ||
       book.coverUrl,
+  );
+}
+
+function isValidCompletedBookMoment(
+  value: CompletedBookMoment | null,
+): value is CompletedBookMoment {
+  if (!value) return false;
+
+  return Boolean(
+    getValidBookTitle(value.title) &&
+      coerceString(value.sessionId).trim() &&
+      Number.isFinite(Number(value.sessionMinutes)) &&
+      Number(value.sessionMinutes) > 0 &&
+      Number.isFinite(Number(value.totalBookMinutes)) &&
+      Number(value.totalBookMinutes) > 0 &&
+      Number.isFinite(value.sessionCount) &&
+      value.sessionCount > 0,
+  );
+}
+
+function isValidSanctuaryReveal(
+  value: SanctuaryReveal | null,
+): value is SanctuaryReveal {
+  if (!value) return false;
+
+  return Boolean(
+    coerceString(value.sessionId).trim() &&
+      Number.isInteger(value.stage) &&
+      value.stage >= 0 &&
+      value.stage < sanctuaryStages.length &&
+      getValidBookTitle(value.bookTitle) &&
+      coerceString(value.title).trim() &&
+      coerceString(value.subtitle).trim() &&
+      coerceString(value.sessionMinutes).trim() &&
+      coerceString(value.ctaText).trim() &&
+      (value.source === "timed" || value.source === "logged"),
   );
 }
 
@@ -523,6 +783,14 @@ export default function HomeScreen() {
   const [manualLogMinutes, setManualLogMinutes] = useState("30");
   const [manualLogBookTitle, setManualLogBookTitle] = useState("");
   const [manualLogError, setManualLogError] = useState<string | null>(null);
+  const [bookInputError, setBookInputError] = useState<string | null>(null);
+  const [sessionReflectionError, setSessionReflectionError] = useState<
+    string | null
+  >(null);
+  const [completedBookReviewError, setCompletedBookReviewError] = useState<
+    string | null
+  >(null);
+  const [savingAction, setSavingAction] = useState<SavingAction>(null);
   const [selectedManualBookMetadata, setSelectedManualBookMetadata] =
     useState<BookMetadata | null>(null);
   const [isManualBookLookupRequested, setIsManualBookLookupRequested] =
@@ -553,6 +821,11 @@ export default function HomeScreen() {
   const [bookTitleFocused, setBookTitleFocused] = useState(false);
   const [hasUserEditedBookQuery, setHasUserEditedBookQuery] = useState(false);
   const [manualBookTitleFocused, setManualBookTitleFocused] = useState(false);
+  const [manualLogNoteFocused, setManualLogNoteFocused] = useState(false);
+  const [completedBookReviewFocused, setCompletedBookReviewFocused] =
+    useState(false);
+  const [sessionReflectionFocused, setSessionReflectionFocused] =
+    useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ritualOpacity = useRef(new Animated.Value(0)).current;
@@ -572,6 +845,9 @@ export default function HomeScreen() {
   const bookTitleInputRef = useRef<TextInput | null>(null);
   const bookInputScrollRef = useRef<ScrollView | null>(null);
   const manualLogScrollRef = useRef<ScrollView | null>(null);
+  const completedBookScrollRef = useRef<ScrollView | null>(null);
+  const completedBookScrollYRef = useRef(0);
+  const completedBookReviewInputHeightRef = useRef(0);
   const manualBookTitleInputRef = useRef<TextInput | null>(null);
   const bookLookupRequestId = useRef(0);
   const lastAutoScrolledBookLookupQuery = useRef<string | null>(null);
@@ -579,12 +855,26 @@ export default function HomeScreen() {
   const manualBookLookupTimer = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
+  const savingActionRef = useRef<SavingAction>(null);
   const completedBookPromptIndex = useRef(
     Math.floor(Math.random() * completedBookReflectionPrompts.length),
   ).current;
   const completedBookSparkValues = useRef(
     completedBookSparkPositions.map(() => new Animated.Value(0)),
   ).current;
+
+  const beginSavingAction = (action: Exclude<SavingAction, null>) => {
+    if (savingActionRef.current) return false;
+
+    savingActionRef.current = action;
+    setSavingAction(action);
+    return true;
+  };
+
+  const endSavingAction = () => {
+    savingActionRef.current = null;
+    setSavingAction(null);
+  };
 
   useEffect(() => {
     const keyboardShowSubscription = Keyboard.addListener("keyboardDidShow", () => {
@@ -593,6 +883,9 @@ export default function HomeScreen() {
     const keyboardHideSubscription = Keyboard.addListener("keyboardDidHide", () => {
       setIsKeyboardVisible(false);
       setManualBookTitleFocused(false);
+      setManualLogNoteFocused(false);
+      setCompletedBookReviewFocused(false);
+      setSessionReflectionFocused(false);
     });
 
     return () => {
@@ -609,7 +902,7 @@ export default function HomeScreen() {
       (screen === "ritual" || screen === "active") &&
       (!isReading || !activeSessionStartTime)
     ) {
-      console.warn(
+      warnInDev(
         "Rousd reading timer screen opened without an active session; returning home.",
       );
       setIsReading(false);
@@ -629,12 +922,14 @@ export default function HomeScreen() {
       (screen === "closeTransition" || screen === "bookInput") &&
       !hasPendingSessionDuration
     ) {
-      console.warn(
+      warnInDev(
         "Rousd post-session screen opened without pending session time; returning home.",
       );
       setPendingSessionSeconds(0);
       setShowBookCompletedInput(false);
       setCompletedBookReview("");
+      setCompletedBookReviewError(null);
+      setBookInputError(null);
       setSelectedBookMetadata(null);
       setBookLookupResults([]);
       setBookLookupError(false);
@@ -645,35 +940,36 @@ export default function HomeScreen() {
       return;
     }
 
-    if (screen === "completedBook" && !completedBookMoment) {
-      console.warn(
+    if (screen === "completedBook" && !isValidCompletedBookMoment(completedBookMoment)) {
+      warnInDev(
         "Rousd completed-book screen opened without completedBookMoment; returning home.",
       );
       setCompletedBookReview("");
+      setCompletedBookReviewError(null);
       setCompletedBookMoment(null);
       setSanctuaryReveal(null);
+      setCompletedBookReviewFocused(false);
       setScreen("home");
       return;
     }
 
     if (screen === "finishedBookDetail" && !selectedFinishedBook) {
-      console.warn(
+      warnInDev(
         "Rousd finished-book detail opened without a selected book; returning to shelf.",
       );
       setScreen("finishedBooks");
       return;
     }
 
-    if (
-      screen === "reveal" &&
-      (!sanctuaryReveal || !sanctuaryStages[sanctuaryReveal.stage])
-    ) {
-      console.warn(
+    if (screen === "reveal" && !isValidSanctuaryReveal(sanctuaryReveal)) {
+      warnInDev(
         "Rousd reveal screen opened without a valid sanctuaryReveal; returning home.",
       );
       setSessionReflection("");
+      setSessionReflectionError(null);
       setSanctuaryReveal(null);
       setCompletedBookMoment(null);
+      setSessionReflectionFocused(false);
       setScreen("home");
     }
   }, [
@@ -717,6 +1013,21 @@ export default function HomeScreen() {
     manualLogBookTitle,
     screen,
   ]);
+
+  useEffect(() => {
+    if (screen !== "manualLog" || !manualLogNoteFocused) return;
+
+    const scrollTimer = setTimeout(() => {
+      manualLogScrollRef.current?.scrollTo({
+        y: 560,
+        animated: true,
+      });
+    }, isKeyboardVisible ? 80 : 180);
+
+    return () => {
+      clearTimeout(scrollTimer);
+    };
+  }, [isKeyboardVisible, manualLogNoteFocused, screen]);
 
   useEffect(() => {
     if (screen !== "bookInput") {
@@ -765,10 +1076,6 @@ export default function HomeScreen() {
     setBookLookupError(false);
 
     const lookupTimer = setTimeout(async () => {
-      if (__DEV__) {
-        console.log(`[Rousd Google Books debug] lookup started: "${trimmedQuery}"`);
-      }
-
       try {
         const results = await Promise.race<BookMetadata[]>([
           searchGoogleBooks(trimmedQuery),
@@ -782,16 +1089,6 @@ export default function HomeScreen() {
 
         if (bookLookupRequestId.current !== requestId) {
           return;
-        }
-
-        if (__DEV__) {
-          const firstResult = results[0];
-          console.log(
-            `[Rousd Google Books debug] screen received ${results.length} result(s)` +
-              (firstResult
-                ? `; first: ${firstResult.title}${firstResult.author ? ` by ${firstResult.author}` : ""}`
-                : ""),
-          );
         }
 
         setBookLookupResults(results);
@@ -1139,10 +1436,11 @@ export default function HomeScreen() {
           await AsyncStorage.getItem(ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY);
 
         const today = getTodayDateString();
-        const savedTodaySeconds =
-          savedSeconds !== null ? Number(savedSeconds) : 0;
-        const savedLifetimeTotalSeconds =
-          savedLifetimeSeconds !== null ? Number(savedLifetimeSeconds) : 0;
+        const savedTodaySeconds = getFiniteStoredNumber(savedSeconds, 0);
+        const savedLifetimeTotalSeconds = getFiniteStoredNumber(
+          savedLifetimeSeconds,
+          0,
+        );
         const todaySecondsToLoad = savedDate === today ? savedTodaySeconds : 0;
 
         setSeconds(todaySecondsToLoad);
@@ -1150,32 +1448,10 @@ export default function HomeScreen() {
         if (savedDate !== null) setLastReadDate(savedDate);
         setLifetimeSeconds(savedLifetimeTotalSeconds);
         if (savedSessions !== null) {
-          const parsedSessions: ReadingSession[] = JSON.parse(savedSessions);
-          let shouldPersistMigratedSessions = false;
-          const migratedSessions = parsedSessions.map((session, index) => {
-            const normalizedSession = normalizeBookMetadataFields(session);
-            const idSafeSession = normalizedSession.id
-              ? normalizedSession
-              : {
-                  ...normalizedSession,
-                  id: `legacy-${index}-${getSessionDateValue(normalizedSession)}`,
-                };
-            const titleSafeSession =
-              idSafeSession.title === LEGACY_UNATTACHED_SESSION_TITLE
-                ? { ...idSafeSession, title: UNATTACHED_SESSION_TITLE }
-                : idSafeSession;
-
-            if (session.note && !session.reflection) {
-              shouldPersistMigratedSessions = true;
-              return { ...titleSafeSession, reflection: session.note };
-            }
-
-            if (titleSafeSession !== session || !normalizedSession.id) {
-              shouldPersistMigratedSessions = true;
-            }
-
-            return titleSafeSession;
-          });
+          const {
+            sessions: migratedSessions,
+            shouldPersist: shouldPersistMigratedSessions,
+          } = parseReadingSessions(savedSessions);
 
           setRecentSessions(migratedSessions);
 
@@ -1186,21 +1462,30 @@ export default function HomeScreen() {
             );
           }
 
-          if (savedTotalCompletedSessions !== null) {
-            setTotalCompletedSessions(Number(savedTotalCompletedSessions));
-          } else {
+          const savedTotalCompletedSessionsNumber = getFiniteStoredNumber(
+            savedTotalCompletedSessions,
+            Number.NaN,
+          );
+
+          if (
+            shouldPersistMigratedSessions ||
+            !Number.isFinite(savedTotalCompletedSessionsNumber)
+          ) {
             setTotalCompletedSessions(migratedSessions.length);
+          } else {
+            setTotalCompletedSessions(savedTotalCompletedSessionsNumber);
           }
         } else if (savedTotalCompletedSessions !== null) {
-          setTotalCompletedSessions(Number(savedTotalCompletedSessions));
+          setTotalCompletedSessions(
+            getFiniteStoredNumber(savedTotalCompletedSessions, 0),
+          );
         }
 
         if (savedCompletedBooks !== null) {
-          const parsedCompletedBooks: CompletedBookReview[] =
-            JSON.parse(savedCompletedBooks);
-          const migratedCompletedBooks = parsedCompletedBooks.map(
-            normalizeBookMetadataFields,
-          );
+          const {
+            books: migratedCompletedBooks,
+            shouldPersist: shouldPersistMigratedCompletedBooks,
+          } = parseCompletedBooks(savedCompletedBooks);
 
           setCompletedBooks(
             [...migratedCompletedBooks].sort(
@@ -1210,11 +1495,7 @@ export default function HomeScreen() {
             ),
           );
 
-          if (
-            migratedCompletedBooks.some(
-              (book, index) => book !== parsedCompletedBooks[index],
-            )
-          ) {
+          if (shouldPersistMigratedCompletedBooks) {
             await AsyncStorage.setItem(
               COMPLETED_BOOKS_KEY,
               JSON.stringify(migratedCompletedBooks),
@@ -1237,7 +1518,11 @@ export default function HomeScreen() {
               ? Number(savedActiveSessionLifetimeStartSeconds)
               : savedLifetimeTotalSeconds;
 
-          if (!Number.isNaN(restoredStartTime)) {
+          if (
+            Number.isFinite(restoredStartTime) &&
+            Number.isFinite(restoredTodayStartSeconds) &&
+            Number.isFinite(restoredLifetimeStartSeconds)
+          ) {
             const elapsed = calculateElapsedSeconds(restoredStartTime);
 
             setSessionStartSeconds(restoredTodayStartSeconds);
@@ -1247,6 +1532,15 @@ export default function HomeScreen() {
             setLifetimeSeconds(restoredLifetimeStartSeconds + elapsed);
             setIsReading(true);
             nextScreen = "active";
+          } else {
+            warnInDev(
+              "Rousd ignored invalid active-session restore data; returning home.",
+            );
+            await AsyncStorage.multiRemove([
+              ACTIVE_SESSION_START_KEY,
+              ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
+              ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
+            ]);
           }
         }
 
@@ -1410,6 +1704,7 @@ export default function HomeScreen() {
   };
 
   const handleBookTitleChange = (nextTitle: string) => {
+    setBookInputError(null);
     setHasUserEditedBookQuery(true);
     setIsBookLookupRequested(true);
     setBookTitle(nextTitle);
@@ -1422,6 +1717,7 @@ export default function HomeScreen() {
 
   const clearBookTitleSelection = () => {
     bookLookupRequestId.current += 1;
+    setBookInputError(null);
     setHasUserEditedBookQuery(true);
     setIsBookLookupRequested(true);
     setBookTitle("");
@@ -1437,6 +1733,7 @@ export default function HomeScreen() {
   const selectGoogleBook = (book: BookMetadata) => {
     Keyboard.dismiss();
     bookLookupRequestId.current += 1;
+    setBookInputError(null);
     setHasUserEditedBookQuery(false);
     setIsBookLookupRequested(false);
     setSelectedBookMetadata({
@@ -1638,9 +1935,6 @@ export default function HomeScreen() {
       didSanctuaryStageChange,
     );
 
-    setRecentSessions(updatedSessions);
-    setTotalCompletedSessions(updatedTotalCompletedSessions);
-
     await AsyncStorage.multiSet([
       [SESSIONS_KEY, JSON.stringify(updatedSessions)],
       [
@@ -1651,6 +1945,9 @@ export default function HomeScreen() {
 
     const isUnattachedSession = isUnattachedSessionTitle(title);
 
+    setRecentSessions(updatedSessions);
+    setTotalCompletedSessions(updatedTotalCompletedSessions);
+    setSessionReflectionError(null);
     setSanctuaryReveal({
       sessionId: newSession.id,
       stage: updatedSanctuaryStageNumber,
@@ -1676,82 +1973,105 @@ export default function HomeScreen() {
   };
 
   const saveBookForSession = async () => {
-    const validBookTitle = getValidBookTitle(bookTitle);
-    const titleToSave = validBookTitle || UNATTACHED_SESSION_TITLE;
-    const shouldCompleteBook = showBookCompletedInput && Boolean(validBookTitle);
-    const selectedMetadata =
-      validBookTitle &&
-      selectedBookMetadata?.title.trim() === validBookTitle
-        ? selectedBookMetadata
-        : validBookTitle
-          ? findKnownBookMetadataByTitle(validBookTitle)
-          : null;
-    const completedBookMetadataFields = getBookMetadataFields(selectedMetadata);
+    if (!beginSavingAction("bookInput")) return;
 
-    const savedSession = await saveSession(titleToSave, selectedMetadata);
+    setBookInputError(null);
 
-    if (showBookCompletedInput && !validBookTitle) {
-      console.warn(
-        "Rousd skipped completed-book save because no valid book title was entered.",
-      );
-      setCompletedBookReview("");
+    try {
+      const validBookTitle = getValidBookTitle(bookTitle);
+      const titleToSave = validBookTitle || UNATTACHED_SESSION_TITLE;
+      const shouldCompleteBook = showBookCompletedInput && Boolean(validBookTitle);
+      const selectedMetadata =
+        validBookTitle &&
+        selectedBookMetadata?.title.trim() === validBookTitle
+          ? selectedBookMetadata
+          : validBookTitle
+            ? findKnownBookMetadataByTitle(validBookTitle)
+            : null;
+      const completedBookMetadataFields = getBookMetadataFields(selectedMetadata);
+
+      const savedSession = await saveSession(titleToSave, selectedMetadata);
+
+      if (showBookCompletedInput && !validBookTitle) {
+        console.warn(
+          "Rousd skipped completed-book save because no valid book title was entered.",
+        );
+        setCompletedBookReview("");
+      }
+
+      if (shouldCompleteBook) {
+        const bookStats = getBookReadingStats(
+          titleToSave,
+          savedSession.updatedSessions,
+        );
+
+        setCompletedBookMoment({
+          sessionId: savedSession.sessionId,
+          title: titleToSave,
+          sessionMinutes: savedSession.sessionMinutes,
+          totalBookMinutes: bookStats.totalMinutes.toFixed(1),
+          sessionCount: bookStats.sessionCount,
+          ...completedBookMetadataFields,
+        });
+        setCompletedBookReviewError(null);
+        setSanctuaryReveal(null);
+      }
+
+      if (validBookTitle) {
+        setCurrentBookTitle(validBookTitle);
+        await AsyncStorage.setItem(CURRENT_BOOK_KEY, validBookTitle);
+      }
+
+      if (validBookTitle) {
+        setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} - ${validBookTitle}`);
+      } else {
+        setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
+      }
+
+      setShowBookCompletedInput(false);
+      setSelectedBookMetadata(null);
+      setHasUserEditedBookQuery(false);
+      setBookLookupResults([]);
+      setBookLookupError(false);
+      setScreen(shouldCompleteBook ? "completedBook" : "reveal");
+
+      setTimeout(() => {
+        setSessionMessage(null);
+      }, 4000);
+    } catch (error) {
+      console.warn("Rousd failed to save timed reading session.", error);
+      setBookInputError("That didn't save. Try once more.");
+    } finally {
+      endSavingAction();
     }
-
-    if (shouldCompleteBook) {
-      const bookStats = getBookReadingStats(
-        titleToSave,
-        savedSession.updatedSessions,
-      );
-
-      setCompletedBookMoment({
-        sessionId: savedSession.sessionId,
-        title: titleToSave,
-        sessionMinutes: savedSession.sessionMinutes,
-        totalBookMinutes: bookStats.totalMinutes.toFixed(1),
-        sessionCount: bookStats.sessionCount,
-        ...completedBookMetadataFields,
-      });
-      setSanctuaryReveal(null);
-    }
-
-    if (validBookTitle) {
-      setCurrentBookTitle(validBookTitle);
-      await AsyncStorage.setItem(CURRENT_BOOK_KEY, validBookTitle);
-    }
-
-    if (validBookTitle) {
-      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} - ${validBookTitle}`);
-    } else {
-      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
-    }
-
-    setShowBookCompletedInput(false);
-    setSelectedBookMetadata(null);
-    setHasUserEditedBookQuery(false);
-    setBookLookupResults([]);
-    setBookLookupError(false);
-    setScreen(shouldCompleteBook ? "completedBook" : "reveal");
-
-    setTimeout(() => {
-      setSessionMessage(null);
-    }, 4000);
   };
 
   const skipBookForSession = async () => {
-    const savedSession = await saveSession(UNATTACHED_SESSION_TITLE);
+    if (!beginSavingAction("bookInputSkip")) return;
 
-    setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
-    setShowBookCompletedInput(false);
-    setCompletedBookReview("");
-    setSelectedBookMetadata(null);
-    setHasUserEditedBookQuery(false);
-    setBookLookupResults([]);
-    setBookLookupError(false);
-    setScreen("reveal");
+    setBookInputError(null);
 
-    setTimeout(() => {
-      setSessionMessage(null);
-    }, 3000);
+    try {
+      const savedSession = await saveSession(UNATTACHED_SESSION_TITLE);
+
+      setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
+      setShowBookCompletedInput(false);
+      setCompletedBookReview("");
+      setSelectedBookMetadata(null);
+      setHasUserEditedBookQuery(false);
+      setBookLookupResults([]);
+      setBookLookupError(false);
+      setScreen("reveal");
+
+      setTimeout(() => {
+        setSessionMessage(null);
+      }, 3000);
+    } catch (error) {
+      console.warn("Rousd failed to save timed reading session.", error);
+      setBookInputError("That didn't save. Try once more.");
+    } finally {
+      endSavingAction();
+    }
   };
 
   const deleteReadingSession = async (sessionId: string) => {
@@ -1819,7 +2139,7 @@ export default function HomeScreen() {
   const confirmDeleteReadingSession = (sessionId: string) => {
     Alert.alert(
       "Delete this reading moment?",
-      "This removes it from your diary. Your book itself will stay.",
+      "This removes it from your diary. Anything on your finished shelf will stay.",
       [
         {
           text: "Keep it",
@@ -1848,7 +2168,7 @@ export default function HomeScreen() {
     const trimmedReview = reviewOverride.trim();
     const savedCompletedBooks = await AsyncStorage.getItem(COMPLETED_BOOKS_KEY);
     const storedCompletedBooks: CompletedBookReview[] = savedCompletedBooks
-      ? JSON.parse(savedCompletedBooks)
+      ? parseCompletedBooks(savedCompletedBooks).books
       : [];
 
     const completedBook: CompletedBookReview = {
@@ -1889,30 +2209,46 @@ export default function HomeScreen() {
           ]
         : [completedBook, ...storedCompletedBooks];
 
-    setCompletedBooks(updatedCompletedBooks);
     await AsyncStorage.setItem(
       COMPLETED_BOOKS_KEY,
       JSON.stringify(updatedCompletedBooks),
     );
+    setCompletedBooks(updatedCompletedBooks);
   };
 
-  const finishCompletedBookMoment = async (reviewOverride?: string) => {
-    if (!completedBookMoment) return;
+  const finishCompletedBookMoment = async (
+    reviewOverride?: string,
+    action: "completedBookSave" | "completedBookSkip" = "completedBookSave",
+  ) => {
+    if (!completedBookMoment || !beginSavingAction(action)) {
+      return false;
+    }
 
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    await saveCompletedBookReview(
-      completedBookMoment.title,
-      completedBookMoment.sessionMinutes,
-      completedBookMoment.totalBookMinutes,
-      completedBookMoment.sessionCount,
-      completedBookMoment.sessionId,
-      reviewOverride ?? completedBookReview,
-      completedBookMoment,
-    );
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      await saveCompletedBookReview(
+        completedBookMoment.title,
+        completedBookMoment.sessionMinutes,
+        completedBookMoment.totalBookMinutes,
+        completedBookMoment.sessionCount,
+        completedBookMoment.sessionId,
+        reviewOverride ?? completedBookReview,
+        completedBookMoment,
+      );
+    } catch (error) {
+      console.warn("Rousd failed to save finished book review.", error);
+      setCompletedBookReviewError("That review didn't save. Try once more.");
+      return false;
+    } finally {
+      endSavingAction();
+    }
 
+    setCompletedBookReviewError(null);
     setCompletedBookReview("");
     setCompletedBookMoment(null);
     setSanctuaryReveal(null);
+    setCompletedBookReviewFocused(false);
+    return true;
   };
 
   const openManualLog = async () => {
@@ -1921,9 +2257,12 @@ export default function HomeScreen() {
     setManualLogBookTitle(currentBookTitle);
     setManualLogNote("");
     setManualLogError(null);
+    setSessionReflectionError(null);
+    setCompletedBookReviewError(null);
     setSelectedManualBookMetadata(null);
     setIsManualBookLookupRequested(false);
     setManualBookTitleFocused(false);
+    setManualLogNoteFocused(false);
     resetManualBookLookup();
     setSanctuaryReveal(null);
     setCompletedBookMoment(null);
@@ -1948,11 +2287,14 @@ export default function HomeScreen() {
     setSelectedManualBookMetadata(null);
     setIsManualBookLookupRequested(false);
     setManualBookTitleFocused(false);
+    setManualLogNoteFocused(false);
     resetManualBookLookup();
     setScreen("home");
   };
 
   const saveManualReadingLog = async () => {
+    if (savingActionRef.current) return;
+
     const normalizedMinutes = manualLogMinutes.replace(",", ".").trim();
     const minutesNumber = Number(normalizedMinutes);
 
@@ -1981,8 +2323,6 @@ export default function HomeScreen() {
     const updatedTodaySeconds = seconds + manualSessionSeconds;
     const updatedLifetimeSeconds = lifetimeSeconds + manualSessionSeconds;
 
-    await persistTodayDateIfNeeded();
-
     const newSession: ReadingSession = {
       id: Date.now().toString(),
       title: titleToSave,
@@ -2010,11 +2350,7 @@ export default function HomeScreen() {
       didSanctuaryStageChange,
     );
 
-    setSeconds(updatedTodaySeconds);
-    setLifetimeSeconds(updatedLifetimeSeconds);
-    setRecentSessions(updatedSessions);
-    setTotalCompletedSessions(updatedTotalCompletedSessions);
-    setSanctuaryReveal({
+    const nextSanctuaryReveal: SanctuaryReveal = {
       sessionId: newSession.id,
       stage: updatedSanctuaryStageNumber,
       stageChanged: didSanctuaryStageChange,
@@ -2025,22 +2361,9 @@ export default function HomeScreen() {
       ctaText: revealCopy.ctaText,
       source: "logged",
       ...manualMetadataFields,
-    });
-    setManualLogNote("");
-    setSelectedManualBookMetadata(null);
-    setIsManualBookLookupRequested(false);
-    setManualBookTitleFocused(false);
-    resetManualBookLookup();
-    setSessionReflection("");
-    setManualLogError(null);
-    setScreen("reveal");
+    };
 
-    if (trimmedTitle) {
-      setCurrentBookTitle(trimmedTitle);
-      await AsyncStorage.setItem(CURRENT_BOOK_KEY, trimmedTitle);
-    }
-
-    await AsyncStorage.multiSet([
+    const storageUpdates: [string, string][] = [
       [SECONDS_KEY, String(updatedTodaySeconds)],
       [LIFETIME_SECONDS_KEY, String(updatedLifetimeSeconds)],
       [SESSIONS_KEY, JSON.stringify(updatedSessions)],
@@ -2048,7 +2371,44 @@ export default function HomeScreen() {
         TOTAL_COMPLETED_SESSIONS_KEY,
         String(updatedTotalCompletedSessions),
       ],
-    ]);
+    ];
+
+    if (trimmedTitle) {
+      storageUpdates.push([CURRENT_BOOK_KEY, trimmedTitle]);
+    }
+
+    if (!beginSavingAction("manualLog")) return;
+
+    try {
+      await persistTodayDateIfNeeded();
+      await AsyncStorage.multiSet(storageUpdates);
+    } catch (error) {
+      console.warn("Rousd failed to save manual reading log.", error);
+      setManualLogError("This moment didn't save yet. Try once more.");
+      return;
+    } finally {
+      endSavingAction();
+    }
+
+    setSeconds(updatedTodaySeconds);
+    setLifetimeSeconds(updatedLifetimeSeconds);
+    setRecentSessions(updatedSessions);
+    setTotalCompletedSessions(updatedTotalCompletedSessions);
+    setSanctuaryReveal(nextSanctuaryReveal);
+    setManualLogNote("");
+    setSelectedManualBookMetadata(null);
+    setIsManualBookLookupRequested(false);
+    setManualBookTitleFocused(false);
+    resetManualBookLookup();
+    setSessionReflection("");
+    setSessionReflectionError(null);
+    setManualLogError(null);
+
+    if (trimmedTitle) {
+      setCurrentBookTitle(trimmedTitle);
+    }
+
+    setScreen("reveal");
 
     setSessionMessage(`+${sessionDuration} saved`);
 
@@ -2069,20 +2429,36 @@ export default function HomeScreen() {
         : session,
     );
 
-    setRecentSessions(updatedSessions);
     await AsyncStorage.setItem(SESSIONS_KEY, JSON.stringify(updatedSessions));
+    setRecentSessions(updatedSessions);
   };
 
   const dismissSanctuaryReveal = async (options?: { saveReflection?: boolean }) => {
-    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const shouldSaveReflection = options?.saveReflection;
+    if (shouldSaveReflection && !beginSavingAction("revealNote")) return;
 
-    if (options?.saveReflection) {
-      await saveSessionReflection();
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      if (shouldSaveReflection) {
+        await saveSessionReflection();
+      }
+    } catch (error) {
+      console.warn("Rousd failed to save reading note.", error);
+      if (shouldSaveReflection) {
+        setSessionReflectionError("That note didn't save. Try once more.");
+      }
+      return;
+    } finally {
+      if (shouldSaveReflection) {
+        endSavingAction();
+      }
     }
 
     setScreen("home");
     setSessionReflection("");
+    setSessionReflectionError(null);
     setSanctuaryReveal(null);
+    setSessionReflectionFocused(false);
   };
 
   const dismissWelcomeScreen = async () => {
@@ -2165,6 +2541,7 @@ export default function HomeScreen() {
       return (
       <ThemedView style={styles.loadingContainer}>
         <ThemedText style={styles.loadingWordmark}>Rousd</ThemedText>
+        <View style={styles.loadingMark} />
       </ThemedView>
     );
 
@@ -2416,6 +2793,18 @@ export default function HomeScreen() {
       const shouldShowAttributionSaveButton = Boolean(
         canCompleteBook || selectedBookMetadata || knownBookMetadata,
       );
+      const shouldUseInlineAttributionActions =
+        bookTitleFocused || isKeyboardVisible;
+      const shouldShowInlineAttributionSaveButton =
+        shouldUseInlineAttributionActions && shouldShowAttributionSaveButton;
+      const isSavingAttributionBook = savingAction === "bookInput";
+      const isSavingAttributionSkip = savingAction === "bookInputSkip";
+      const isSavingAttribution =
+        isSavingAttributionBook || isSavingAttributionSkip;
+      const shouldUseTallAttributionLayout =
+        isKeyboardVisible ||
+        shouldShowBookLookup ||
+        visiblePickerSessions.length > 0;
 
       return (
       <ThemedView
@@ -2432,17 +2821,68 @@ export default function HomeScreen() {
           ref={bookInputScrollRef}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
+          automaticallyAdjustKeyboardInsets
           contentContainerStyle={[
             styles.bookReturnContent,
+            shouldUseTallAttributionLayout && styles.bookReturnContentTall,
             { paddingBottom: insets.bottom + 80 },
           ]}
         >
+          {shouldUseInlineAttributionActions ? (
+            shouldShowInlineAttributionSaveButton ? (
+              <View style={styles.bookReturnInlineActions}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.bookReturnSecondaryButton,
+                    isSavingAttribution && { opacity: 0.62 },
+                    pressed && styles.buttonPressed,
+                  ]}
+                  disabled={isSavingAttribution}
+                  onPress={skipBookForSession}
+                >
+                  <ThemedText style={styles.bookReturnSecondaryButtonText}>
+                    {isSavingAttributionSkip ? "Saving..." : "Not this time"}
+                  </ThemedText>
+                </Pressable>
+
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.bookReturnSaveButton,
+                    isSavingAttribution && { opacity: 0.72 },
+                    pressed && styles.buttonPressed,
+                  ]}
+                  disabled={isSavingAttribution}
+                  onPress={saveBookForSession}
+                >
+                  <ThemedText style={styles.bookReturnSaveButtonText}>
+                    {isSavingAttributionBook ? "Saving..." : "Save to this book"}
+                  </ThemedText>
+                </Pressable>
+              </View>
+            ) : (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.diaryBackButton,
+                  styles.bookReturnTopSkipButton,
+                  isSavingAttribution && { opacity: 0.62 },
+                  pressed && styles.buttonPressed,
+                ]}
+                disabled={isSavingAttribution}
+                onPress={skipBookForSession}
+              >
+                <ThemedText style={styles.diaryBackButtonText}>
+                  {isSavingAttributionSkip ? "Saving..." : "Not this time"}
+                </ThemedText>
+              </Pressable>
+            )
+          ) : null}
+
           <ThemedText style={styles.bookReturnEyebrow}>Welcome back</ThemedText>
           <ThemedText style={styles.bookReturnTitle}>
             What did you read?
           </ThemedText>
           <ThemedText style={styles.bookReturnMinutes}>
-            Your time was kept · {pendingDuration}
+            Your time was kept - {pendingDuration}
           </ThemedText>
 
           <View style={styles.bookAttributionCard}>
@@ -2520,18 +2960,27 @@ export default function HomeScreen() {
             </View>
           </View>
 
-          {shouldShowAttributionSaveButton ? (
+          {shouldShowAttributionSaveButton &&
+          !shouldShowInlineAttributionSaveButton ? (
             <Pressable
               style={({ pressed }) => [
                 styles.bookAttributionSaveButton,
+                isSavingAttribution && { opacity: 0.72 },
                 pressed && styles.buttonPressed,
               ]}
+              disabled={isSavingAttribution}
               onPress={saveBookForSession}
             >
               <ThemedText style={styles.bookAttributionSaveButtonText}>
-                Save to this book
+                {isSavingAttributionBook ? "Saving..." : "Save to this book"}
               </ThemedText>
             </Pressable>
+          ) : null}
+
+          {bookInputError ? (
+            <ThemedText style={styles.manualLogError}>
+              {bookInputError}
+            </ThemedText>
           ) : null}
 
           <View style={styles.bookCompletedCard}>
@@ -2585,7 +3034,7 @@ export default function HomeScreen() {
             <View style={styles.bookLookupPanel}>
               <View style={styles.bookLookupHeaderRow}>
                 <ThemedText style={styles.bookLookupTitle}>
-                  Possible matches
+                  Possible editions
                 </ThemedText>
                 {isBookLookupLoading ? (
                   <ThemedText style={styles.bookLookupLoading}>
@@ -2699,19 +3148,23 @@ export default function HomeScreen() {
             </View>
           )}
 
-          <View style={styles.closeButtonRow}>
-            <Pressable
-              style={({ pressed }) => [
-                styles.bookReturnSecondaryButton,
-                pressed && styles.buttonPressed,
-              ]}
-              onPress={skipBookForSession}
-            >
-              <ThemedText style={styles.bookReturnSecondaryButtonText}>
-                Not this time
-              </ThemedText>
-            </Pressable>
-          </View>
+          {!shouldUseInlineAttributionActions ? (
+            <View style={styles.closeButtonRow}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.bookReturnSecondaryButton,
+                  isSavingAttribution && { opacity: 0.72 },
+                  pressed && styles.buttonPressed,
+                ]}
+                disabled={isSavingAttribution}
+                onPress={skipBookForSession}
+              >
+                <ThemedText style={styles.bookReturnSecondaryButtonText}>
+                  {isSavingAttributionSkip ? "Saving..." : "Not this time"}
+                </ThemedText>
+              </Pressable>
+            </View>
+          ) : null}
         </ScrollView>
         </KeyboardAvoidingView>
       </ThemedView>
@@ -2729,15 +3182,17 @@ export default function HomeScreen() {
         (isManualBookLookupLoading ||
           hasManualBookLookupSearched ||
           manualBookLookupResults.length > 0);
-      const shouldInlineManualLogActions =
-        isKeyboardVisible && manualBookTitleFocused;
+      const shouldInlineManualLogActions = isKeyboardVisible;
+      const isSavingManualLog = savingAction === "manualLog";
       const manualLogActions = (
         <View style={styles.closeButtonRow}>
           <Pressable
             style={({ pressed }) => [
               styles.closeSecondaryButton,
+              isSavingManualLog && { opacity: 0.62 },
               pressed && styles.buttonPressed,
             ]}
+            disabled={isSavingManualLog}
             onPress={cancelManualLog}
           >
             <ThemedText style={styles.closeSecondaryButtonText}>
@@ -2748,12 +3203,14 @@ export default function HomeScreen() {
           <Pressable
             style={({ pressed }) => [
               styles.closeSaveButton,
+              isSavingManualLog && { opacity: 0.72 },
               pressed && styles.buttonPressed,
             ]}
+            disabled={isSavingManualLog}
             onPress={saveManualReadingLog}
           >
             <ThemedText style={styles.closeSaveButtonText}>
-              Save reading
+              {isSavingManualLog ? "Saving..." : "Save reading"}
             </ThemedText>
           </Pressable>
         </View>
@@ -2775,12 +3232,13 @@ export default function HomeScreen() {
           ref={manualLogScrollRef}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
+          automaticallyAdjustKeyboardInsets
           contentContainerStyle={[
             styles.closeSessionContent,
             styles.manualLogContent,
             {
               paddingBottom:
-                insets.bottom + (shouldInlineManualLogActions ? 190 : 132),
+                insets.bottom + (shouldInlineManualLogActions ? 120 : 132),
             },
           ]}
         >
@@ -2800,7 +3258,7 @@ export default function HomeScreen() {
           <ThemedText style={styles.closeEyebrow}>Reading moment</ThemedText>
           <ThemedText style={styles.closeTitle}>What did the time hold?</ThemedText>
           <ThemedText style={styles.closeMinutes}>
-            Capture reading time, with or without the timer.
+            For reading you did away from the timer.
           </ThemedText>
 
           <View style={styles.manualPresetRow}>
@@ -2844,6 +3302,7 @@ export default function HomeScreen() {
             style={styles.closeBookInput}
             keyboardType="decimal-pad"
             returnKeyType="next"
+            onFocus={() => setManualLogNoteFocused(false)}
           />
 
           <View
@@ -2860,6 +3319,7 @@ export default function HomeScreen() {
               value={manualLogBookTitle}
               onChangeText={handleManualBookTitleChange}
               onFocus={() => {
+                setManualLogNoteFocused(false);
                 setManualBookTitleFocused(true);
                 setIsManualBookLookupRequested(true);
                 searchManualBookTitle(manualLogBookTitle);
@@ -2994,6 +3454,8 @@ export default function HomeScreen() {
             placeholderTextColor="rgba(255,255,255,0.45)"
             value={manualLogNote}
             onChangeText={setManualLogNote}
+            onFocus={() => setManualLogNoteFocused(true)}
+            onBlur={() => setManualLogNoteFocused(false)}
             style={[styles.closeBookInput, styles.manualBookInput, styles.manualNoteInput]}
             multiline
             textAlignVertical="top"
@@ -3028,10 +3490,11 @@ export default function HomeScreen() {
     }
 
     case "completedBook": {
-      if (!completedBookMoment) {
+      if (!isValidCompletedBookMoment(completedBookMoment)) {
         return (
           <ThemedView style={styles.loadingContainer}>
-            <ThemedText style={styles.loadingText}>Returning home...</ThemedText>
+            <ThemedText style={styles.loadingWordmark}>Rousd</ThemedText>
+            <View style={styles.loadingMark} />
           </ThemedView>
         );
       }
@@ -3055,8 +3518,63 @@ export default function HomeScreen() {
       const completedBookSessionLabel =
         completedBookMoment.sessionCount === 1 ? "moment" : "moments";
       const completedBookBottomPadding = isKeyboardVisible
-        ? Math.max(insets.bottom + 180, 220)
+        ? Math.max(insets.bottom + 140, 180)
         : insets.bottom + 32;
+      const shouldInlineCompletedBookActions =
+        isKeyboardVisible || completedBookReviewFocused;
+      const isSavingCompletedBookSave = savingAction === "completedBookSave";
+      const isSavingCompletedBookSkip = savingAction === "completedBookSkip";
+      const isSavingCompletedBook =
+        isSavingCompletedBookSave || isSavingCompletedBookSkip;
+      const completedBookActions = (
+        <>
+          {completedBookReviewError ? (
+            <ThemedText style={styles.manualLogError}>
+              {completedBookReviewError}
+            </ThemedText>
+          ) : null}
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.completedBookReturnButton,
+              isSavingCompletedBook && { opacity: 0.72 },
+              pressed && styles.buttonPressed,
+            ]}
+            disabled={isSavingCompletedBook}
+            onPress={async () => {
+              if (await finishCompletedBookMoment()) {
+                setScreen("finishedBooks");
+              }
+            }}
+          >
+            <ThemedText style={styles.completedBookReturnButtonText}>
+              {isSavingCompletedBookSave
+                ? "Saving..."
+                : "Save & remember this book"}
+            </ThemedText>
+          </Pressable>
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.completedBookSkipButton,
+              isSavingCompletedBook && { opacity: 0.62 },
+              pressed && styles.buttonPressed,
+            ]}
+            disabled={isSavingCompletedBook}
+            onPress={async () => {
+              if (await finishCompletedBookMoment("", "completedBookSkip")) {
+                setScreen("finishedBooks");
+              }
+            }}
+          >
+            <ThemedText style={styles.completedBookSkipButtonText}>
+              {isSavingCompletedBookSkip
+                ? "Saving..."
+                : "Return without saving note"}
+            </ThemedText>
+          </Pressable>
+        </>
+      );
 
       return (
       <ThemedView style={styles.completedBookScreen}>
@@ -3066,28 +3584,48 @@ export default function HomeScreen() {
         >
           <TouchableWithoutFeedback onPress={Keyboard.dismiss} accessible={false}>
             <ScrollView
+              ref={completedBookScrollRef}
               keyboardShouldPersistTaps="handled"
               keyboardDismissMode="interactive"
+              automaticallyAdjustKeyboardInsets
+              onScroll={(event) => {
+                completedBookScrollYRef.current =
+                  event.nativeEvent.contentOffset.y;
+              }}
+              scrollEventThrottle={16}
               contentContainerStyle={[
                 styles.completedBookRevealContent,
                 isKeyboardVisible &&
                   styles.completedBookRevealContentWithKeyboard,
                 {
-                  paddingTop: insets.top + 18,
+                  paddingTop: insets.top + (isKeyboardVisible ? 10 : 18),
                   paddingBottom: completedBookBottomPadding,
                 },
               ]}
             >
           <ThemedText style={styles.completedBookEyebrow}>FINISHED</ThemedText>
 
-          <View style={styles.completedBookCoverStage}>
-            <View style={styles.completedBookCover}>
+          <View
+            style={[
+              styles.completedBookCoverStage,
+              isKeyboardVisible && styles.completedBookCoverStageCompact,
+            ]}
+          >
+            <View
+              style={[
+                styles.completedBookCover,
+                isKeyboardVisible && styles.completedBookCoverCompact,
+              ]}
+            >
               {completedBookMoment.coverUrl ? (
                 <Image
                   source={{
                     uri: normalizeStoredCoverUrl(completedBookMoment.coverUrl) ?? "",
                   }}
-                  style={styles.completedBookCoverImage}
+                  style={[
+                    styles.completedBookCoverImage,
+                    isKeyboardVisible && styles.completedBookCoverImageCompact,
+                  ]}
                   resizeMode="cover"
                 />
               ) : (
@@ -3118,6 +3656,7 @@ export default function HomeScreen() {
             style={[
               styles.finishedBookDetailMetaCard,
               styles.completedBookMetaCard,
+              isKeyboardVisible && styles.completedBookMetaCardCompact,
             ]}
           >
             <View
@@ -3175,7 +3714,36 @@ export default function HomeScreen() {
               placeholder="A thought, a line, a feeling..."
               placeholderTextColor="rgba(47,93,80,0.38)"
               value={completedBookReview}
-              onChangeText={setCompletedBookReview}
+              onChangeText={(text) => {
+                setCompletedBookReview(text);
+                setCompletedBookReviewError(null);
+              }}
+              onFocus={() => setCompletedBookReviewFocused(true)}
+              onBlur={() => setCompletedBookReviewFocused(false)}
+              onContentSizeChange={(event) => {
+                const nextHeight = event.nativeEvent.contentSize.height;
+                const previousHeight =
+                  completedBookReviewInputHeightRef.current || nextHeight;
+                const heightDelta = nextHeight - previousHeight;
+
+                completedBookReviewInputHeightRef.current = nextHeight;
+
+                if (
+                  !completedBookReviewFocused ||
+                  !isKeyboardVisible ||
+                  heightDelta <= 1
+                ) {
+                  return;
+                }
+
+                const scrollDelta = Math.min(heightDelta, 36);
+                requestAnimationFrame(() => {
+                  completedBookScrollRef.current?.scrollTo({
+                    y: completedBookScrollYRef.current + scrollDelta,
+                    animated: true,
+                  });
+                });
+              }}
               style={styles.completedBookReflectionInput}
               multiline
               returnKeyType="done"
@@ -3185,35 +3753,13 @@ export default function HomeScreen() {
             />
           </View>
 
-            <Pressable
-              style={({ pressed }) => [
-                styles.completedBookReturnButton,
-                pressed && styles.buttonPressed,
-              ]}
-              onPress={async () => {
-                await finishCompletedBookMoment();
-                setScreen("finishedBooks");
-              }}
-            >
-              <ThemedText style={styles.completedBookReturnButtonText}>
-                Save & remember this book
-              </ThemedText>
-            </Pressable>
-
-            <Pressable
-              style={({ pressed }) => [
-                styles.completedBookSkipButton,
-                pressed && styles.buttonPressed,
-              ]}
-              onPress={async () => {
-                await finishCompletedBookMoment("");
-                setScreen("finishedBooks");
-              }}
-            >
-              <ThemedText style={styles.completedBookSkipButtonText}>
-                Save without a note
-              </ThemedText>
-            </Pressable>
+          {shouldInlineCompletedBookActions ? (
+            <View style={styles.completedBookInlineActions}>
+              {completedBookActions}
+            </View>
+          ) : (
+            completedBookActions
+          )}
             </ScrollView>
           </TouchableWithoutFeedback>
         </KeyboardAvoidingView>
@@ -3222,10 +3768,11 @@ export default function HomeScreen() {
     }
 
     case "reveal": {
-      if (!sanctuaryReveal || !sanctuaryStages[sanctuaryReveal.stage]) {
+      if (!isValidSanctuaryReveal(sanctuaryReveal)) {
         return (
           <ThemedView style={styles.loadingContainer}>
-            <ThemedText style={styles.loadingText}>Returning home...</ThemedText>
+            <ThemedText style={styles.loadingWordmark}>Rousd</ThemedText>
+            <View style={styles.loadingMark} />
           </ThemedView>
         );
       }
@@ -3233,6 +3780,57 @@ export default function HomeScreen() {
       const allowsSessionReflection = sanctuaryReveal.source === "timed";
       const hasSessionReflection =
         allowsSessionReflection && sessionReflection.trim().length > 0;
+      const shouldInlineRevealActions =
+        allowsSessionReflection &&
+        (isKeyboardVisible || sessionReflectionFocused);
+      const isSavingRevealNote = savingAction === "revealNote";
+      const revealActions = (
+        <>
+          {sessionReflectionError ? (
+            <ThemedText style={styles.manualLogError}>
+              {sessionReflectionError}
+            </ThemedText>
+          ) : null}
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.bookRevealContinueButton,
+              isSavingRevealNote && { opacity: 0.72 },
+              pressed && styles.buttonPressed,
+            ]}
+            disabled={isSavingRevealNote}
+            onPress={() =>
+              dismissSanctuaryReveal({
+                saveReflection: hasSessionReflection,
+              })
+            }
+          >
+            <ThemedText style={styles.bookRevealContinueButtonText}>
+              {isSavingRevealNote
+                ? "Saving..."
+                : hasSessionReflection
+                  ? "Save note and return home"
+                  : "Return home"}
+            </ThemedText>
+          </Pressable>
+
+          {allowsSessionReflection && hasSessionReflection && (
+            <Pressable
+              style={({ pressed }) => [
+                styles.bookRevealSecondaryButton,
+                isSavingRevealNote && { opacity: 0.62 },
+                pressed && styles.buttonPressed,
+              ]}
+              disabled={isSavingRevealNote}
+              onPress={() => dismissSanctuaryReveal()}
+            >
+              <ThemedText style={styles.bookRevealSecondaryButtonText}>
+                Return without saving note
+              </ThemedText>
+            </Pressable>
+          )}
+        </>
+      );
       const revealFooterBottomPadding = isKeyboardVisible
         ? isUnattachedReveal
           ? 10
@@ -3386,7 +3984,12 @@ export default function HomeScreen() {
                   placeholder="A thought, a line, a feeling..."
                   placeholderTextColor="rgba(47,93,80,0.42)"
                   value={sessionReflection}
-                  onChangeText={setSessionReflection}
+                  onChangeText={(text) => {
+                    setSessionReflection(text);
+                    setSessionReflectionError(null);
+                  }}
+                  onFocus={() => setSessionReflectionFocused(true)}
+                  onBlur={() => setSessionReflectionFocused(false)}
                   style={[
                     styles.sessionReflectionInput,
                     isUnattachedReveal && styles.sessionReflectionInputCompact,
@@ -3415,43 +4018,22 @@ export default function HomeScreen() {
                 {sanctuaryReveal.subtitle}
               </ThemedText>
             </View>
+            {shouldInlineRevealActions ? (
+              <View style={styles.bookRevealInlineActions}>
+                {revealActions}
+              </View>
+            ) : null}
           </ScrollView>
-          <View
-            style={[
-              styles.bookRevealFooter,
-              { paddingBottom: revealFooterBottomPadding },
-            ]}
-          >
-            <Pressable
-              style={({ pressed }) => [
-                styles.bookRevealContinueButton,
-                pressed && styles.buttonPressed,
+          {!shouldInlineRevealActions ? (
+            <View
+              style={[
+                styles.bookRevealFooter,
+                { paddingBottom: revealFooterBottomPadding },
               ]}
-              onPress={() =>
-                dismissSanctuaryReveal({
-                  saveReflection: hasSessionReflection,
-                })
-              }
             >
-              <ThemedText style={styles.bookRevealContinueButtonText}>
-                {hasSessionReflection ? "Save note and return home" : "Return home"}
-              </ThemedText>
-            </Pressable>
-
-            {allowsSessionReflection && hasSessionReflection && (
-              <Pressable
-                style={({ pressed }) => [
-                  styles.bookRevealSecondaryButton,
-                  pressed && styles.buttonPressed,
-                ]}
-                onPress={() => dismissSanctuaryReveal()}
-              >
-                <ThemedText style={styles.bookRevealSecondaryButtonText}>
-                  Save without a note
-                </ThemedText>
-              </Pressable>
-            )}
-          </View>
+              {revealActions}
+            </View>
+          ) : null}
         </Animated.View>
         </KeyboardAvoidingView>
       </ThemedView>
@@ -3479,16 +4061,16 @@ export default function HomeScreen() {
 
             <ThemedText style={styles.diaryTitle}>Your reading life</ThemedText>
             <ThemedText style={styles.diarySubtitle}>
-              A private record.
+              Your private reading journal.
             </ThemedText>
 
             {diarySessions.length === 0 ? (
               <View style={styles.diaryEmptyCard}>
                 <ThemedText style={styles.diaryEmptyText}>
-                  No notes yet.
+                  No reading moments here yet.
                 </ThemedText>
                 <ThemedText style={styles.diaryEmptySubtext}>
-                  {"After a reading moment, you can leave a note here if you'd like."}
+                  {"Start reading, then come back here whenever you leave a note."}
                 </ThemedText>
               </View>
             ) : (
@@ -3624,7 +4206,7 @@ export default function HomeScreen() {
                   Your shelf is waiting.
                 </ThemedText>
                 <ThemedText style={styles.diaryEmptySubtext}>
-                  Books you finish will rest here.
+                  Mark a book finished after reading, and it will rest here.
                 </ThemedText>
               </View>
             ) : (
@@ -3732,7 +4314,8 @@ export default function HomeScreen() {
       if (!book) {
         return (
           <ThemedView style={styles.loadingContainer}>
-            <ThemedText style={styles.loadingText}>Returning to shelf...</ThemedText>
+            <ThemedText style={styles.loadingWordmark}>Rousd</ThemedText>
+            <View style={styles.loadingMark} />
           </ThemedView>
         );
       }
@@ -3945,7 +4528,7 @@ export default function HomeScreen() {
                     Add a reading moment
                   </ThemedText>
                   <ThemedText style={styles.menuNavSubtext}>
-                    For reading away from the timer
+                    For reading you did away from the timer.
                   </ThemedText>
                 </View>
                 <Ionicons
@@ -3964,7 +4547,7 @@ export default function HomeScreen() {
       style={styles.screen}
       contentContainerStyle={[
         styles.scrollContent,
-        { paddingBottom: 132 + insets.bottom },
+        { paddingBottom: Math.max(insets.bottom + 28, 44) },
       ]}
     >
       <ThemedView
@@ -4268,7 +4851,7 @@ export default function HomeScreen() {
                 Add a reading moment
               </ThemedText>
               <ThemedText style={styles.manualLogButtonSubtext}>
-                For reading away from the timer
+                For reading you did away from the timer.
               </ThemedText>
             </View>
             <Ionicons
@@ -4310,14 +4893,13 @@ const styles = StyleSheet.create({
     flexGrow: 1,
   },
   container: {
-    flex: 1,
+    minHeight: "100%",
     position: "relative",
     paddingHorizontal: 22,
     paddingTop: 46,
     paddingBottom: 54,
     gap: 10,
     backgroundColor: colors.background,
-    overflow: "hidden",
   },
   warmVignetteTop: {
     position: "absolute",
@@ -4440,6 +5022,13 @@ const styles = StyleSheet.create({
     fontWeight: "400",
     letterSpacing: 0,
     fontFamily: serifFont,
+  },
+  loadingMark: {
+    width: 34,
+    height: 2,
+    borderRadius: 1,
+    backgroundColor: "rgba(47,93,80,0.22)",
+    marginTop: 12,
   },
   welcomeScreen: {
     flex: 1,
@@ -7194,6 +7783,19 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     paddingVertical: 36,
   },
+  bookReturnContentTall: {
+    justifyContent: "flex-start",
+    paddingVertical: 22,
+  },
+  bookReturnTopSkipButton: {
+    marginBottom: 18,
+  },
+  bookReturnInlineActions: {
+    flexDirection: "row",
+    gap: 12,
+    backgroundColor: "transparent",
+    marginBottom: 18,
+  },
   bookReturnEyebrow: {
     color: "rgba(47,93,80,0.62)",
     fontSize: 13,
@@ -7615,6 +8217,12 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: "rgba(47,93,80,0.07)",
   },
+  bookRevealInlineActions: {
+    width: "100%",
+    backgroundColor: "transparent",
+    marginTop: 6,
+    marginBottom: 12,
+  },
   bookRevealEyebrow: {
     color: "rgba(47,93,80,0.62)",
     fontSize: 13,
@@ -7796,6 +8404,11 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
     marginBottom: 10,
   },
+  completedBookCoverStageCompact: {
+    width: 92,
+    height: 118,
+    marginBottom: 6,
+  },
   completedBookAmbientGlow: {
     position: "absolute",
     width: 220,
@@ -7825,10 +8438,21 @@ const styles = StyleSheet.create({
     shadowRadius: 16,
     elevation: 3,
   },
+  completedBookCoverCompact: {
+    width: 84,
+    height: 118,
+    borderRadius: 10,
+    padding: 10,
+  },
   completedBookCoverImage: {
     width: 102,
     height: 144,
     margin: -12,
+  },
+  completedBookCoverImageCompact: {
+    width: 84,
+    height: 118,
+    margin: -10,
   },
   completedBookCoverTitle: {
     color: "#F0EBE0",
@@ -7893,6 +8517,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     marginTop: 14,
   },
+  completedBookMetaCardCompact: {
+    marginTop: 8,
+  },
   completedBookMetaRow: {
     paddingVertical: 8,
   },
@@ -7916,6 +8543,11 @@ const styles = StyleSheet.create({
   },
   completedBookReflectionWrap: {
     width: "100%",
+  },
+  completedBookInlineActions: {
+    width: "100%",
+    backgroundColor: "transparent",
+    marginTop: 2,
   },
   completedBookReflectionLabel: {
     color: "#C4945A",
