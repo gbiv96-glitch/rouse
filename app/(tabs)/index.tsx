@@ -106,6 +106,8 @@ type Screen =
 
 type LibraryReturnTarget = "home" | "menu";
 
+type BookAttributionStep = "choose" | "reflect";
+
 type SavingAction =
   | "bookInput"
   | "bookInputSkip"
@@ -132,6 +134,7 @@ type SanctuaryReveal = {
   sessionMinutes: string;
   ctaText: string;
   source: "timed" | "logged";
+  noteSaved?: boolean;
 } & BookMetadataFields;
 
 const sanctuaryStages: SanctuaryStage[] = [
@@ -770,6 +773,8 @@ export default function HomeScreen() {
     useState<LibraryReturnTarget>("home");
   const [isLoaded, setIsLoaded] = useState(false);
   const [bookTitle, setBookTitle] = useState("");
+  const [bookAttributionStep, setBookAttributionStep] =
+    useState<BookAttributionStep>("choose");
   const [currentBookTitle, setCurrentBookTitle] = useState("");
   const [showBookCompletedInput, setShowBookCompletedInput] = useState(false);
   const [completedBookReview, setCompletedBookReview] = useState("");
@@ -823,8 +828,6 @@ export default function HomeScreen() {
   const [manualBookTitleFocused, setManualBookTitleFocused] = useState(false);
   const [manualLogNoteFocused, setManualLogNoteFocused] = useState(false);
   const [completedBookReviewFocused, setCompletedBookReviewFocused] =
-    useState(false);
-  const [sessionReflectionFocused, setSessionReflectionFocused] =
     useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -885,7 +888,6 @@ export default function HomeScreen() {
       setManualBookTitleFocused(false);
       setManualLogNoteFocused(false);
       setCompletedBookReviewFocused(false);
-      setSessionReflectionFocused(false);
     });
 
     return () => {
@@ -969,7 +971,6 @@ export default function HomeScreen() {
       setSessionReflectionError(null);
       setSanctuaryReveal(null);
       setCompletedBookMoment(null);
-      setSessionReflectionFocused(false);
       setScreen("home");
     }
   }, [
@@ -1124,6 +1125,7 @@ export default function HomeScreen() {
   useEffect(() => {
     if (
       screen !== "bookInput" ||
+      bookAttributionStep !== "choose" ||
       !bookTitleFocused ||
       !hasUserEditedBookQuery ||
       selectedBookMetadata ||
@@ -1145,7 +1147,7 @@ export default function HomeScreen() {
     const scrollTimer = setTimeout(() => {
       requestAnimationFrame(() => {
         bookInputScrollRef.current?.scrollTo({
-          y: 260,
+          y: isKeyboardVisible ? 150 : 110,
           animated: true,
         });
       });
@@ -1156,6 +1158,7 @@ export default function HomeScreen() {
     };
   }, [
     bookLookupResults.length,
+    bookAttributionStep,
     bookTitle,
     bookTitleFocused,
     hasUserEditedBookQuery,
@@ -1311,6 +1314,7 @@ export default function HomeScreen() {
 
     animation.start(({ finished }) => {
       if (finished) {
+        setBookAttributionStep("choose");
         setScreen("bookInput");
       }
     });
@@ -1727,6 +1731,7 @@ export default function HomeScreen() {
     setIsBookLookupLoading(false);
     setHasBookLookupSearched(false);
     setBookLookupError(false);
+    setBookAttributionStep("choose");
     setTimeout(() => bookTitleInputRef.current?.focus(), 0);
   };
 
@@ -1745,6 +1750,7 @@ export default function HomeScreen() {
     setIsBookLookupLoading(false);
     setHasBookLookupSearched(false);
     setBookLookupError(false);
+    setBookAttributionStep("reflect");
     lastAutoScrolledBookLookupQuery.current = book.title.trim();
 
     setTimeout(() => {
@@ -1893,10 +1899,12 @@ export default function HomeScreen() {
   const saveSession = async (
     title: string,
     bookMetadata?: BookMetadata | null,
+    reflectionOverride = "",
   ) => {
     const sessionSeconds = pendingSessionSeconds;
     const sessionMinutes = (sessionSeconds / 60).toFixed(1);
     const sessionDuration = formatDuration(sessionSeconds / 60);
+    const trimmedReflection = reflectionOverride.trim();
     const metadataFields = bookMetadata
       ? getBookMetadataFields(bookMetadata)
       : isUnattachedSessionTitle(title)
@@ -1909,6 +1917,7 @@ export default function HomeScreen() {
       minutes: sessionMinutes,
       createdAt: new Date().toISOString(),
       source: "timed",
+      ...(trimmedReflection ? { reflection: trimmedReflection } : {}),
       ...metadataFields,
     };
 
@@ -1962,6 +1971,7 @@ export default function HomeScreen() {
       sessionMinutes: sessionDuration,
       ctaText: revealCopy.ctaText,
       source: "timed",
+      noteSaved: Boolean(trimmedReflection),
       ...metadataFields,
     });
 
@@ -1990,7 +2000,11 @@ export default function HomeScreen() {
             : null;
       const completedBookMetadataFields = getBookMetadataFields(selectedMetadata);
 
-      const savedSession = await saveSession(titleToSave, selectedMetadata);
+      const savedSession = await saveSession(
+        titleToSave,
+        selectedMetadata,
+        completedBookReview,
+      );
 
       if (showBookCompletedInput && !validBookTitle) {
         console.warn(
@@ -2029,6 +2043,10 @@ export default function HomeScreen() {
       }
 
       setShowBookCompletedInput(false);
+      if (!shouldCompleteBook) {
+        setCompletedBookReview("");
+      }
+      setBookAttributionStep("choose");
       setSelectedBookMetadata(null);
       setHasUserEditedBookQuery(false);
       setBookLookupResults([]);
@@ -2056,6 +2074,7 @@ export default function HomeScreen() {
 
       setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
       setShowBookCompletedInput(false);
+      setBookAttributionStep("choose");
       setCompletedBookReview("");
       setSelectedBookMetadata(null);
       setHasUserEditedBookQuery(false);
@@ -2360,6 +2379,7 @@ export default function HomeScreen() {
       sessionMinutes: sessionDuration,
       ctaText: revealCopy.ctaText,
       source: "logged",
+      noteSaved: Boolean(trimmedNote),
       ...manualMetadataFields,
     };
 
@@ -2458,7 +2478,6 @@ export default function HomeScreen() {
     setSessionReflection("");
     setSessionReflectionError(null);
     setSanctuaryReveal(null);
-    setSessionReflectionFocused(false);
   };
 
   const dismissWelcomeScreen = async () => {
@@ -2774,12 +2793,8 @@ export default function HomeScreen() {
     case "bookInput": {
       const pendingDuration = formatDuration(pendingSessionSeconds / 60);
       const canCompleteBook = Boolean(getValidBookTitle(bookTitle));
+      const isReflectingBookStep = bookAttributionStep === "reflect";
       const bookLookupQueryIsReady = bookTitle.trim().length >= 3;
-      const shouldShowBookLookup =
-        !selectedBookMetadata &&
-        hasUserEditedBookQuery &&
-        bookLookupQueryIsReady &&
-        (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
       const knownBookMetadata = getValidBookTitle(bookTitle)
         ? findKnownBookMetadataByTitle(bookTitle)
         : null;
@@ -2790,13 +2805,26 @@ export default function HomeScreen() {
       );
       const attributionPreviewTitle =
         attributionPreviewMetadata?.title || getValidBookTitle(bookTitle) || "R";
-      const shouldShowAttributionSaveButton = Boolean(
+      const attributionStatusText = selectedBookMetadata
+        ? "Selected from Google Books"
+        : knownBookMetadata
+          ? "Saved book found"
+          : "Manual title";
+      const hasAttributionBook = Boolean(
         canCompleteBook || selectedBookMetadata || knownBookMetadata,
       );
-      const shouldUseInlineAttributionActions =
-        bookTitleFocused || isKeyboardVisible;
-      const shouldShowInlineAttributionSaveButton =
-        shouldUseInlineAttributionActions && shouldShowAttributionSaveButton;
+      const isChoosingBook = !isReflectingBookStep || !hasAttributionBook;
+      const isSearchingForBook =
+        isChoosingBook &&
+        bookTitleFocused &&
+        hasUserEditedBookQuery &&
+        bookTitle.trim().length > 0;
+      const shouldShowBookLookup =
+        isChoosingBook &&
+        !selectedBookMetadata &&
+        hasUserEditedBookQuery &&
+        bookLookupQueryIsReady &&
+        (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
       const isSavingAttributionBook = savingAction === "bookInput";
       const isSavingAttributionSkip = savingAction === "bookInputSkip";
       const isSavingAttribution =
@@ -2805,6 +2833,26 @@ export default function HomeScreen() {
         isKeyboardVisible ||
         shouldShowBookLookup ||
         visiblePickerSessions.length > 0;
+      const shouldShowBookChoiceShortcuts =
+        isChoosingBook && !isSearchingForBook;
+      const continueToAttributionReflection = () => {
+        if (!hasAttributionBook) return;
+
+        Keyboard.dismiss();
+        setBookInputError(null);
+        setBookAttributionStep("reflect");
+        setTimeout(() => {
+          bookInputScrollRef.current?.scrollTo({ y: 0, animated: true });
+        }, 80);
+      };
+      const attributionPrimaryLabel = isChoosingBook
+        ? "Continue"
+        : isSavingAttributionBook
+          ? "Saving..."
+          : "Save to this book";
+      const handleAttributionPrimaryPress = isChoosingBook
+        ? continueToAttributionReflection
+        : saveBookForSession;
 
       return (
       <ThemedView
@@ -2822,349 +2870,451 @@ export default function HomeScreen() {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
           automaticallyAdjustKeyboardInsets
+          contentInset={{ bottom: isKeyboardVisible ? 180 : 0 }}
+          scrollIndicatorInsets={{ bottom: isKeyboardVisible ? 180 : 0 }}
           contentContainerStyle={[
             styles.bookReturnContent,
             shouldUseTallAttributionLayout && styles.bookReturnContentTall,
-            { paddingBottom: insets.bottom + 80 },
+            { paddingBottom: insets.bottom + (isKeyboardVisible ? 260 : 88) },
           ]}
         >
-          {shouldUseInlineAttributionActions ? (
-            shouldShowInlineAttributionSaveButton ? (
-              <View style={styles.bookReturnInlineActions}>
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.bookReturnSecondaryButton,
-                    isSavingAttribution && { opacity: 0.62 },
-                    pressed && styles.buttonPressed,
-                  ]}
-                  disabled={isSavingAttribution}
-                  onPress={skipBookForSession}
-                >
-                  <ThemedText style={styles.bookReturnSecondaryButtonText}>
-                    {isSavingAttributionSkip ? "Saving..." : "Not this time"}
-                  </ThemedText>
-                </Pressable>
-
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.bookReturnSaveButton,
-                    isSavingAttribution && { opacity: 0.72 },
-                    pressed && styles.buttonPressed,
-                  ]}
-                  disabled={isSavingAttribution}
-                  onPress={saveBookForSession}
-                >
-                  <ThemedText style={styles.bookReturnSaveButtonText}>
-                    {isSavingAttributionBook ? "Saving..." : "Save to this book"}
-                  </ThemedText>
-                </Pressable>
-              </View>
-            ) : (
+          {!isChoosingBook ? (
+            <View style={styles.bookAttributionTopNav}>
               <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Back to choose book"
+                hitSlop={10}
                 style={({ pressed }) => [
-                  styles.diaryBackButton,
-                  styles.bookReturnTopSkipButton,
-                  isSavingAttribution && { opacity: 0.62 },
+                  styles.bookAttributionBackButton,
                   pressed && styles.buttonPressed,
                 ]}
-                disabled={isSavingAttribution}
-                onPress={skipBookForSession}
+                onPress={() => setBookAttributionStep("choose")}
               >
-                <ThemedText style={styles.diaryBackButtonText}>
-                  {isSavingAttributionSkip ? "Saving..." : "Not this time"}
+                <Ionicons
+                  name="chevron-back"
+                  size={20}
+                  color="rgba(47,93,80,0.72)"
+                />
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.bookEditButton,
+                  styles.bookEditButtonHeader,
+                  pressed && styles.buttonPressed,
+                ]}
+                onPress={() => {
+                  setBookAttributionStep("choose");
+                  setTimeout(() => {
+                    bookTitleInputRef.current?.focus();
+                  }, 120);
+                }}
+              >
+                <ThemedText style={styles.bookEditButtonText}>
+                  Edit book
                 </ThemedText>
               </Pressable>
-            )
+            </View>
           ) : null}
 
-          <ThemedText style={styles.bookReturnEyebrow}>Welcome back</ThemedText>
-          <ThemedText style={styles.bookReturnTitle}>
-            What did you read?
+          <ThemedText style={styles.bookReturnEyebrow}>
+            {isChoosingBook ? "STEP 1 OF 2" : "STEP 2 OF 2"}
           </ThemedText>
-          <ThemedText style={styles.bookReturnMinutes}>
-            Your time was kept - {pendingDuration}
+          <ThemedText
+            style={[
+              styles.bookReturnTitle,
+              isSearchingForBook && styles.bookReturnTitleCompact,
+            ]}
+          >
+            {isChoosingBook ? "What did you read?" : "What stayed with you?"}
           </ThemedText>
+          <ThemedText
+            style={[
+              styles.bookReturnHelperLine,
+              isSearchingForBook && styles.bookReturnHelperLineCompact,
+            ]}
+          >
+            {isChoosingBook
+              ? "Start by choosing the book you just read."
+              : "Add a note if you'd like. Mark it finished if this was the last page."}
+          </ThemedText>
+          {isChoosingBook ? (
+            <ThemedText
+              style={[
+                styles.bookReturnMinutes,
+                isSearchingForBook && styles.bookReturnMinutesCompact,
+              ]}
+            >
+              {pendingDuration} saved
+            </ThemedText>
+          ) : null}
 
-          <View style={styles.bookAttributionCard}>
-            <View style={styles.bookAttributionCover}>
-              {attributionPreviewCoverUrl ? (
-                <Image
-                  source={{ uri: attributionPreviewCoverUrl }}
-                  style={styles.bookAttributionCoverImage}
-                  resizeMode="cover"
-                />
-              ) : (
-                <ThemedText
-                  style={styles.bookAttributionCoverText}
-                  numberOfLines={1}
-                >
-                  {attributionPreviewTitle}
+          {isChoosingBook ? (
+            <>
+              <View style={styles.bookAttributionCard}>
+                <View style={styles.bookAttributionInputRow}>
+                  <TextInput
+                    ref={bookTitleInputRef}
+                    placeholder="Search for a book..."
+                    placeholderTextColor="rgba(31,41,51,0.38)"
+                    value={bookTitle}
+                    onChangeText={handleBookTitleChange}
+                    onFocus={() => {
+                      setBookTitleFocused(true);
+                      if (hasUserEditedBookQuery) {
+                        setIsBookLookupRequested(true);
+                      }
+                    }}
+                    onBlur={() => setBookTitleFocused(false)}
+                    style={styles.bookAttributionInput}
+                    returnKeyType="done"
+                    blurOnSubmit
+                    onSubmitEditing={Keyboard.dismiss}
+                  />
+                  {bookTitle.trim().length > 0 ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Clear book title"
+                      hitSlop={8}
+                      style={({ pressed }) => [
+                        styles.bookAttributionClearButton,
+                        pressed && styles.buttonPressed,
+                      ]}
+                      onPress={clearBookTitleSelection}
+                    >
+                      <Ionicons
+                        name="close-circle-outline"
+                        size={22}
+                        color="rgba(47,93,80,0.48)"
+                      />
+                    </Pressable>
+                  ) : null}
+                </View>
+                {selectedBookMetadata ? (
+                  <ThemedText
+                    style={styles.bookAttributionSelectedText}
+                    numberOfLines={1}
+                  >
+                    Selected from Google Books
+                  </ThemedText>
+                ) : knownBookMetadata ? (
+                  <ThemedText
+                    style={styles.bookAttributionSelectedText}
+                    numberOfLines={1}
+                  >
+                    Saved book found
+                  </ThemedText>
+                ) : isSearchingForBook && canCompleteBook ? (
+                  <ThemedText
+                    style={styles.bookAttributionSelectedText}
+                    numberOfLines={1}
+                  >
+                    You can continue with this title.
+                  </ThemedText>
+                ) : null}
+              </View>
+
+              {bookInputError ? (
+                <ThemedText style={styles.manualLogError}>
+                  {bookInputError}
                 </ThemedText>
+              ) : null}
+
+              {shouldShowBookLookup ? (
+                <View style={styles.bookLookupPanel}>
+                  <View style={styles.bookLookupHeaderRow}>
+                    <ThemedText style={styles.bookLookupTitle}>
+                      Possible editions
+                    </ThemedText>
+                    {isBookLookupLoading ? (
+                      <ThemedText style={styles.bookLookupLoading}>
+                        Looking softly...
+                      </ThemedText>
+                    ) : null}
+                  </View>
+                  {bookLookupResults.length > 0 ? (
+                    <ThemedText style={styles.bookLookupHelperText}>
+                      Choose the edition you read, or keep your typed title.
+                    </ThemedText>
+                  ) : null}
+
+                  {bookLookupResults.map((book) => {
+                    return (
+                      <Pressable
+                        key={book.googleBooksId ?? book.title}
+                        style={({ pressed }) => [
+                          styles.bookLookupChoice,
+                          pressed && styles.buttonPressed,
+                        ]}
+                        onPress={() => selectGoogleBook(book)}
+                      >
+                        {book.coverUrl ? (
+                          <Image
+                            source={{ uri: book.coverUrl }}
+                            style={styles.bookLookupCover}
+                          />
+                        ) : (
+                          <View style={styles.bookLookupCoverPlaceholder}>
+                            <ThemedText style={styles.bookLookupCoverText}>
+                              R
+                            </ThemedText>
+                          </View>
+                        )}
+                        <View style={styles.bookLookupCopy}>
+                          <View style={styles.bookLookupTitleRow}>
+                            <ThemedText
+                              style={styles.bookLookupBookTitle}
+                              numberOfLines={1}
+                            >
+                              {book.title}
+                            </ThemedText>
+                          </View>
+                          {book.author ? (
+                            <ThemedText
+                              style={styles.bookLookupBookAuthor}
+                              numberOfLines={1}
+                            >
+                              {book.author}
+                            </ThemedText>
+                          ) : null}
+                        </View>
+                      </Pressable>
+                    );
+                  })}
+
+                  {!isBookLookupLoading &&
+                  hasBookLookupSearched &&
+                  bookLookupResults.length === 0 ? (
+                    <ThemedText style={styles.bookLookupEmptyText}>
+                      {bookLookupError
+                        ? "Couldn't check matches right now. You can still save this title."
+                        : "No matches yet. You can still save this title."}
+                    </ThemedText>
+                  ) : null}
+
+                  {bookLookupResults.length > 0 ? (
+                    <ThemedText style={styles.bookLookupAttribution}>
+                      Book data from Google Books
+                    </ThemedText>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {shouldShowBookChoiceShortcuts && visiblePickerSessions.length > 0 && (
+                <View style={styles.recentBookPicker}>
+                  <ThemedText style={styles.recentBookPickerTitle}>Recent books</ThemedText>
+                  {visiblePickerSessions.map((session) => (
+                    <Pressable
+                      key={session.id}
+                      style={({ pressed }) => [
+                        styles.recentBookChoice,
+                        pressed && styles.buttonPressed,
+                      ]}
+                      onPress={() => {
+                        Keyboard.dismiss();
+                        handleBookTitleChange(session.title);
+                        setHasUserEditedBookQuery(false);
+                        setIsBookLookupRequested(false);
+                        setBookLookupResults([]);
+                        setBookAttributionStep("reflect");
+                        setTimeout(() => {
+                          bookInputScrollRef.current?.scrollTo({
+                            y: 0,
+                            animated: true,
+                          });
+                        }, 80);
+                      }}
+                    >
+                      <View style={styles.recentBookMiniCover}>
+                        {session.coverUrl ? (
+                          <Image
+                            source={{
+                              uri: normalizeStoredCoverUrl(session.coverUrl) ?? "",
+                            }}
+                            style={styles.recentBookMiniCoverImage}
+                            resizeMode="cover"
+                          />
+                        ) : (
+                          <ThemedText style={styles.recentBookMiniCoverText}>R</ThemedText>
+                        )}
+                      </View>
+                      <View style={styles.recentBookChoiceCopy}>
+                        <ThemedText style={styles.recentBookChoiceTitle} numberOfLines={1}>
+                          {getDisplaySessionTitle(session.title)}
+                        </ThemedText>
+                        <ThemedText style={styles.recentBookChoiceMeta}>
+                          Last saved - {formatDuration(Number(session.minutes))}
+                        </ThemedText>
+                      </View>
+                    </Pressable>
+                  ))}
+                </View>
               )}
-            </View>
-            <View style={styles.bookAttributionCopy}>
-              <ThemedText style={styles.bookAttributionLabel}>Save this time to</ThemedText>
-              <View style={styles.bookAttributionInputRow}>
+
+              {shouldShowBookChoiceShortcuts ? (
+                <View style={styles.bookManualEntryHint}>
+                <ThemedText style={styles.bookManualEntryHintTitle}>
+                  {"Don't see your book?"}
+                </ThemedText>
+                <ThemedText style={styles.bookManualEntryHintText}>
+                  You can add it manually.
+                </ThemedText>
+              </View>
+              ) : null}
+            </>
+          ) : (
+            <>
+              <View style={styles.bookAttributionReviewCard}>
+                <View style={styles.bookAttributionReviewTopRow}>
+                  <View style={styles.bookAttributionReviewCover}>
+                    {attributionPreviewCoverUrl ? (
+                      <Image
+                        source={{ uri: attributionPreviewCoverUrl }}
+                        style={styles.bookAttributionCoverImage}
+                        resizeMode="cover"
+                      />
+                    ) : (
+                      <ThemedText
+                        style={styles.bookAttributionCoverText}
+                        numberOfLines={1}
+                      >
+                        {attributionPreviewTitle}
+                      </ThemedText>
+                    )}
+                  </View>
+                  <View style={styles.bookAttributionReviewCopy}>
+                    <ThemedText
+                      style={styles.bookAttributionReviewTitle}
+                      numberOfLines={2}
+                    >
+                      {getValidBookTitle(bookTitle) || "Untitled book"}
+                    </ThemedText>
+                    {attributionPreviewMetadata?.author ? (
+                      <ThemedText
+                        style={styles.bookAttributionReviewAuthor}
+                        numberOfLines={1}
+                      >
+                        {attributionPreviewMetadata.author}
+                      </ThemedText>
+                    ) : null}
+                    <ThemedText style={styles.bookAttributionSelectedText}>
+                      {attributionStatusText}
+                    </ThemedText>
+                  </View>
+                </View>
+              </View>
+
+              {bookInputError ? (
+                <ThemedText style={styles.manualLogError}>
+                  {bookInputError}
+                </ThemedText>
+              ) : null}
+
+              <View style={styles.bookReflectionCard}>
+                <ThemedText style={styles.bookReflectionLabel}>
+                  {"A note, if you'd like"}
+                </ThemedText>
                 <TextInput
-                  ref={bookTitleInputRef}
-                  placeholder="Book title"
-                  placeholderTextColor="rgba(31,41,51,0.38)"
-                  value={bookTitle}
-                  onChangeText={handleBookTitleChange}
-                  onFocus={() => {
-                    setBookTitleFocused(true);
-                    if (hasUserEditedBookQuery) {
-                      setIsBookLookupRequested(true);
-                    }
+                  placeholder="A thought, a line, a feeling..."
+                  placeholderTextColor="rgba(47,93,80,0.38)"
+                  value={completedBookReview}
+                  onChangeText={(text) => {
+                    setCompletedBookReview(text);
+                    setBookInputError(null);
                   }}
-                  onBlur={() => setBookTitleFocused(false)}
-                  style={styles.bookAttributionInput}
+                  onFocus={() => setCompletedBookReviewFocused(true)}
+                  onBlur={() => setCompletedBookReviewFocused(false)}
+                  style={styles.bookReflectionInput}
+                  multiline
                   returnKeyType="done"
                   blurOnSubmit
                   onSubmitEditing={Keyboard.dismiss}
+                  textAlignVertical="top"
                 />
-                {bookTitle.trim().length > 0 ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Clear book title"
-                    hitSlop={8}
-                    style={({ pressed }) => [
-                      styles.bookAttributionClearButton,
-                      pressed && styles.buttonPressed,
-                    ]}
-                    onPress={clearBookTitleSelection}
-                  >
-                    <Ionicons
-                      name="close-circle-outline"
-                      size={22}
-                      color="rgba(47,93,80,0.48)"
-                    />
-                  </Pressable>
-                ) : null}
               </View>
-              {selectedBookMetadata ? (
-                <ThemedText
-                  style={styles.bookAttributionSelectedText}
-                  numberOfLines={1}
-                >
-                  Selected from Google Books
-                </ThemedText>
-              ) : knownBookMetadata ? (
-                <ThemedText
-                  style={styles.bookAttributionSelectedText}
-                  numberOfLines={1}
-                >
-                  Saved book found
-                </ThemedText>
-              ) : null}
-            </View>
-          </View>
 
-          {shouldShowAttributionSaveButton &&
-          !shouldShowInlineAttributionSaveButton ? (
+              <View style={styles.bookCompletedCard}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.bookCompletedToggle,
+                    showBookCompletedInput && styles.bookCompletedToggleSelected,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={() => {
+                    setShowBookCompletedInput((value) => !value);
+                  }}
+                >
+                  <View style={styles.bookCompletedToggleCopy}>
+                    <ThemedText style={styles.bookCompletedLabel}>
+                      Finished this book?
+                    </ThemedText>
+                    <ThemedText style={styles.bookCompletedSubtext}>
+                      If this was the last page, you can close it gently.
+                    </ThemedText>
+                  </View>
+                  <View
+                    style={[
+                      styles.bookCompletedSwitchTrack,
+                      showBookCompletedInput &&
+                        styles.bookCompletedSwitchTrackSelected,
+                    ]}
+                  >
+                    <View
+                      style={[
+                        styles.bookCompletedSwitchKnob,
+                        showBookCompletedInput &&
+                          styles.bookCompletedSwitchKnobSelected,
+                      ]}
+                    />
+                  </View>
+                </Pressable>
+              </View>
+            </>
+          )}
+
+          <View
+            style={[
+              styles.closeButtonRow,
+              styles.bookAttributionBottomActions,
+              !isChoosingBook && styles.bookAttributionBottomActionsFinal,
+            ]}
+          >
             <Pressable
               style={({ pressed }) => [
-                styles.bookAttributionSaveButton,
+                styles.bookReturnSecondaryButton,
+                !isChoosingBook && styles.bookReturnSecondaryButtonFinal,
                 isSavingAttribution && { opacity: 0.72 },
                 pressed && styles.buttonPressed,
               ]}
               disabled={isSavingAttribution}
-              onPress={saveBookForSession}
+              onPress={skipBookForSession}
             >
-              <ThemedText style={styles.bookAttributionSaveButtonText}>
-                {isSavingAttributionBook ? "Saving..." : "Save to this book"}
+              <ThemedText style={styles.bookReturnSecondaryButtonText}>
+                {isSavingAttributionSkip ? "Saving..." : "Not this time"}
               </ThemedText>
             </Pressable>
-          ) : null}
-
-          {bookInputError ? (
-            <ThemedText style={styles.manualLogError}>
-              {bookInputError}
-            </ThemedText>
-          ) : null}
-
-          <View style={styles.bookCompletedCard}>
             <Pressable
               style={({ pressed }) => [
-                styles.bookCompletedToggle,
-                showBookCompletedInput && styles.bookCompletedToggleSelected,
-                !canCompleteBook && { opacity: 0.4 },
-                pressed && styles.buttonPressed,
+                styles.bookReturnSaveButton,
+                !isChoosingBook && styles.bookReturnSaveButtonFinal,
+                !hasAttributionBook && styles.bookReturnSaveButtonDisabled,
+                isSavingAttribution && { opacity: 0.72 },
+                pressed && hasAttributionBook && styles.buttonPressed,
               ]}
-              disabled={!canCompleteBook}
-              onPress={() => {
-                setShowBookCompletedInput((value) => !value);
-                if (showBookCompletedInput) {
-                  setCompletedBookReview("");
-                }
-              }}
+              disabled={!hasAttributionBook || isSavingAttribution}
+              onPress={handleAttributionPrimaryPress}
             >
-              <View style={styles.bookCompletedToggleCopy}>
-                <ThemedText style={styles.bookCompletedLabel}>
-                  Finished this book?
-                </ThemedText>
-                <ThemedText style={styles.bookCompletedSubtext}>
-                  If this was the last page, you can close it gently.
-                </ThemedText>
-              </View>
-              <View
+              <ThemedText
                 style={[
-                  styles.bookCompletedSwitchTrack,
-                  showBookCompletedInput &&
-                    styles.bookCompletedSwitchTrackSelected,
+                  styles.bookReturnSaveButtonText,
+                  !hasAttributionBook &&
+                    styles.bookReturnSaveButtonTextDisabled,
                 ]}
               >
-                <View
-                  style={[
-                    styles.bookCompletedSwitchKnob,
-                    showBookCompletedInput &&
-                      styles.bookCompletedSwitchKnobSelected,
-                  ]}
-                />
-              </View>
-            </Pressable>
-            {!canCompleteBook ? (
-              <ThemedText style={styles.bookCompletedDisabledHelper}>
-                Name the book first, then you can mark it finished.
+                {attributionPrimaryLabel}
               </ThemedText>
-            ) : null}
+            </Pressable>
           </View>
-
-          {shouldShowBookLookup ? (
-            <View style={styles.bookLookupPanel}>
-              <View style={styles.bookLookupHeaderRow}>
-                <ThemedText style={styles.bookLookupTitle}>
-                  Possible editions
-                </ThemedText>
-                {isBookLookupLoading ? (
-                  <ThemedText style={styles.bookLookupLoading}>
-                    Looking softly...
-                  </ThemedText>
-                ) : null}
-              </View>
-              {bookLookupResults.length > 0 ? (
-                <ThemedText style={styles.bookLookupHelperText}>
-                  Choose the edition you read, or keep your typed title.
-                </ThemedText>
-              ) : null}
-
-              {bookLookupResults.map((book) => {
-                return (
-                  <Pressable
-                    key={book.googleBooksId ?? book.title}
-                    style={({ pressed }) => [
-                      styles.bookLookupChoice,
-                      pressed && styles.buttonPressed,
-                    ]}
-                    onPress={() => selectGoogleBook(book)}
-                  >
-                    {book.coverUrl ? (
-                      <Image
-                        source={{ uri: book.coverUrl }}
-                        style={styles.bookLookupCover}
-                      />
-                    ) : (
-                      <View style={styles.bookLookupCoverPlaceholder}>
-                        <ThemedText style={styles.bookLookupCoverText}>
-                          R
-                        </ThemedText>
-                      </View>
-                    )}
-                    <View style={styles.bookLookupCopy}>
-                      <View style={styles.bookLookupTitleRow}>
-                        <ThemedText
-                          style={styles.bookLookupBookTitle}
-                          numberOfLines={1}
-                        >
-                          {book.title}
-                        </ThemedText>
-                      </View>
-                      {book.author ? (
-                        <ThemedText
-                          style={styles.bookLookupBookAuthor}
-                          numberOfLines={1}
-                        >
-                          {book.author}
-                        </ThemedText>
-                      ) : null}
-                    </View>
-                  </Pressable>
-                );
-              })}
-
-              {!isBookLookupLoading &&
-              hasBookLookupSearched &&
-              bookLookupResults.length === 0 ? (
-                <ThemedText style={styles.bookLookupEmptyText}>
-                  {bookLookupError
-                    ? "Couldn't check matches right now. You can still save this title."
-                    : "No matches yet. You can still save this title."}
-                </ThemedText>
-              ) : null}
-
-              {bookLookupResults.length > 0 ? (
-                <ThemedText style={styles.bookLookupAttribution}>
-                  Book data from Google Books
-                </ThemedText>
-              ) : null}
-            </View>
-          ) : null}
-
-          {visiblePickerSessions.length > 0 && (
-            <View style={styles.recentBookPicker}>
-              <ThemedText style={styles.recentBookPickerTitle}>Recent reading</ThemedText>
-              {visiblePickerSessions.map((session) => (
-                <Pressable
-                  key={session.id}
-                  style={({ pressed }) => [
-                    styles.recentBookChoice,
-                    pressed && styles.buttonPressed,
-                  ]}
-                  onPress={() => handleBookTitleChange(session.title)}
-                >
-                  <View style={styles.recentBookMiniCover}>
-                    {session.coverUrl ? (
-                      <Image
-                        source={{
-                          uri: normalizeStoredCoverUrl(session.coverUrl) ?? "",
-                        }}
-                        style={styles.recentBookMiniCoverImage}
-                        resizeMode="cover"
-                      />
-                    ) : (
-                      <ThemedText style={styles.recentBookMiniCoverText}>R</ThemedText>
-                    )}
-                  </View>
-                  <View style={styles.recentBookChoiceCopy}>
-                    <ThemedText style={styles.recentBookChoiceTitle} numberOfLines={1}>
-                      {getDisplaySessionTitle(session.title)}
-                    </ThemedText>
-                    <ThemedText style={styles.recentBookChoiceMeta}>
-                      Last saved - {formatDuration(Number(session.minutes))}
-                    </ThemedText>
-                  </View>
-                </Pressable>
-              ))}
-            </View>
-          )}
-
-          {!shouldUseInlineAttributionActions ? (
-            <View style={styles.closeButtonRow}>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.bookReturnSecondaryButton,
-                  isSavingAttribution && { opacity: 0.72 },
-                  pressed && styles.buttonPressed,
-                ]}
-                disabled={isSavingAttribution}
-                onPress={skipBookForSession}
-              >
-                <ThemedText style={styles.bookReturnSecondaryButtonText}>
-                  {isSavingAttributionSkip ? "Saving..." : "Not this time"}
-                </ThemedText>
-              </Pressable>
-            </View>
-          ) : null}
         </ScrollView>
         </KeyboardAvoidingView>
       </ThemedView>
@@ -3777,12 +3927,6 @@ export default function HomeScreen() {
         );
       }
 
-      const allowsSessionReflection = sanctuaryReveal.source === "timed";
-      const hasSessionReflection =
-        allowsSessionReflection && sessionReflection.trim().length > 0;
-      const shouldInlineRevealActions =
-        allowsSessionReflection &&
-        (isKeyboardVisible || sessionReflectionFocused);
       const isSavingRevealNote = savingAction === "revealNote";
       const revealActions = (
         <>
@@ -3799,36 +3943,12 @@ export default function HomeScreen() {
               pressed && styles.buttonPressed,
             ]}
             disabled={isSavingRevealNote}
-            onPress={() =>
-              dismissSanctuaryReveal({
-                saveReflection: hasSessionReflection,
-              })
-            }
+            onPress={() => dismissSanctuaryReveal()}
           >
             <ThemedText style={styles.bookRevealContinueButtonText}>
-              {isSavingRevealNote
-                ? "Saving..."
-                : hasSessionReflection
-                  ? "Save note and return home"
-                  : "Return home"}
+              {isSavingRevealNote ? "Saving..." : "Return home"}
             </ThemedText>
           </Pressable>
-
-          {allowsSessionReflection && hasSessionReflection && (
-            <Pressable
-              style={({ pressed }) => [
-                styles.bookRevealSecondaryButton,
-                isSavingRevealNote && { opacity: 0.62 },
-                pressed && styles.buttonPressed,
-              ]}
-              disabled={isSavingRevealNote}
-              onPress={() => dismissSanctuaryReveal()}
-            >
-              <ThemedText style={styles.bookRevealSecondaryButtonText}>
-                Return without saving note
-              </ThemedText>
-            </Pressable>
-          )}
         </>
       );
       const revealFooterBottomPadding = isKeyboardVisible
@@ -3847,9 +3967,7 @@ export default function HomeScreen() {
           : 24;
       const revealMainCopy = isUnattachedReveal
         ? "This moment has a place now."
-        : sanctuaryReveal.stageChanged
-          ? "Your reading place changed."
-          : "This book has a little more history now.";
+        : "This book has a little more history now.";
 
       return (
       <ThemedView
@@ -3891,7 +4009,7 @@ export default function HomeScreen() {
                 isUnattachedReveal && styles.bookRevealEyebrowCompact,
               ]}
             >
-              Time saved
+              Saved
             </ThemedText>
             <ThemedText
               style={[
@@ -3899,7 +4017,7 @@ export default function HomeScreen() {
                 isUnattachedReveal && styles.bookRevealTitleCompact,
               ]}
             >
-              {sanctuaryReveal.title}
+              {revealMainCopy}
             </ThemedText>
 
             <Animated.View
@@ -3945,17 +4063,27 @@ export default function HomeScreen() {
                 )}
               </View>
               <View style={styles.bookRevealTextBlock}>
-                <ThemedText style={styles.bookRevealLabel}>Saved to your reading place</ThemedText>
                 <ThemedText style={styles.bookRevealBookTitle} numberOfLines={2}>
                   {revealBookTitle}
                 </ThemedText>
+                {sanctuaryReveal.author ? (
+                  <ThemedText
+                    style={[
+                      styles.bookRevealMeta,
+                      isUnattachedReveal && styles.bookRevealMetaCompact,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {sanctuaryReveal.author}
+                  </ThemedText>
+                ) : null}
                 <ThemedText
                   style={[
                     styles.bookRevealMeta,
                     isUnattachedReveal && styles.bookRevealMetaCompact,
                   ]}
                 >
-                  +{sanctuaryReveal.sessionMinutes} added
+                  +{formatDuration(Number(sanctuaryReveal.sessionMinutes))} added
                 </ThemedText>
                 {isUnattachedReveal ? (
                   <ThemedText
@@ -3970,70 +4098,20 @@ export default function HomeScreen() {
               </View>
             </Animated.View>
 
-            {allowsSessionReflection && (
-              <View
-                style={[
-                  styles.sessionReflectionWrap,
-                  isUnattachedReveal && styles.sessionReflectionWrapCompact,
-                ]}
-              >
-                <ThemedText style={styles.sessionReflectionLabel}>
-                  {"A note, if you'd like one."}
-                </ThemedText>
-                <TextInput
-                  placeholder="A thought, a line, a feeling..."
-                  placeholderTextColor="rgba(47,93,80,0.42)"
-                  value={sessionReflection}
-                  onChangeText={(text) => {
-                    setSessionReflection(text);
-                    setSessionReflectionError(null);
-                  }}
-                  onFocus={() => setSessionReflectionFocused(true)}
-                  onBlur={() => setSessionReflectionFocused(false)}
-                  style={[
-                    styles.sessionReflectionInput,
-                    isUnattachedReveal && styles.sessionReflectionInputCompact,
-                  ]}
-                  multiline
-                  blurOnSubmit
-                  onSubmitEditing={Keyboard.dismiss}
-                  textAlignVertical="top"
-                />
-              </View>
-            )}
-
-            <View
-              style={[
-                styles.revealCopyCard,
-                isUnattachedReveal && styles.revealCopyCardCompact,
-              ]}
-            >
-              <ThemedText style={styles.revealStageLabel}>
-                {sanctuaryStages[sanctuaryReveal.stage].shortLabel}
+            {sanctuaryReveal.noteSaved ? (
+              <ThemedText style={styles.bookRevealNoteSaved}>
+                Your note was saved.
               </ThemedText>
-              <ThemedText style={styles.revealMainCopy}>
-                {revealMainCopy}
-              </ThemedText>
-              <ThemedText style={styles.revealSubCopy}>
-                {sanctuaryReveal.subtitle}
-              </ThemedText>
-            </View>
-            {shouldInlineRevealActions ? (
-              <View style={styles.bookRevealInlineActions}>
-                {revealActions}
-              </View>
             ) : null}
           </ScrollView>
-          {!shouldInlineRevealActions ? (
-            <View
-              style={[
-                styles.bookRevealFooter,
-                { paddingBottom: revealFooterBottomPadding },
-              ]}
-            >
-              {revealActions}
-            </View>
-          ) : null}
+          <View
+            style={[
+              styles.bookRevealFooter,
+              { paddingBottom: revealFooterBottomPadding },
+            ]}
+          >
+            {revealActions}
+          </View>
         </Animated.View>
         </KeyboardAvoidingView>
       </ThemedView>
@@ -7790,11 +7868,23 @@ const styles = StyleSheet.create({
   bookReturnTopSkipButton: {
     marginBottom: 18,
   },
-  bookReturnInlineActions: {
+  bookAttributionTopNav: {
+    minHeight: 34,
     flexDirection: "row",
-    gap: 12,
+    alignItems: "center",
+    justifyContent: "space-between",
     backgroundColor: "transparent",
-    marginBottom: 18,
+    marginBottom: 2,
+  },
+  bookAttributionBackButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.48)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.07)",
   },
   bookReturnEyebrow: {
     color: "rgba(47,93,80,0.62)",
@@ -7815,6 +7905,23 @@ const styles = StyleSheet.create({
     textAlign: "center",
     fontFamily: serifFont,
   },
+  bookReturnTitleCompact: {
+    fontSize: 28,
+    lineHeight: 34,
+  },
+  bookReturnHelperLine: {
+    color: "rgba(31,41,51,0.62)",
+    fontSize: 15,
+    lineHeight: 22,
+    fontWeight: "600",
+    textAlign: "center",
+    marginTop: 8,
+  },
+  bookReturnHelperLineCompact: {
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 5,
+  },
   bookReturnMinutes: {
     color: "rgba(31,41,51,0.58)",
     fontSize: 15,
@@ -7824,20 +7931,48 @@ const styles = StyleSheet.create({
     marginTop: 9,
     marginBottom: 26,
   },
+  bookReturnMinutesCompact: {
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 5,
+    marginBottom: 14,
+  },
   bookAttributionCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 14,
-    backgroundColor: "rgba(255,255,255,0.72)",
-    borderRadius: 28,
+    backgroundColor: "rgba(255,255,255,0.78)",
+    borderRadius: 26,
     padding: 16,
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
+    borderWidth: 1.5,
+    borderColor: "rgba(47,93,80,0.14)",
     ...softCardShadow,
   },
+  bookAttributionStepHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 14,
+    backgroundColor: "transparent",
+    marginBottom: 14,
+  },
+  bookAttributionStepCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  bookAttributionStepTitle: {
+    color: "#1B2A22",
+    fontSize: 18,
+    lineHeight: 24,
+    fontWeight: "900",
+  },
+  bookAttributionStepSubtext: {
+    color: "rgba(31,41,51,0.56)",
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "600",
+    marginTop: 3,
+  },
   bookAttributionCover: {
-    width: 68,
-    height: 92,
+    width: 48,
+    height: 66,
     borderRadius: 9,
     alignItems: "center",
     justifyContent: "center",
@@ -7862,27 +7997,23 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "transparent",
   },
-  bookAttributionLabel: {
-    color: "rgba(47,93,80,0.62)",
-    fontSize: 12,
-    lineHeight: 17,
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 1,
-    marginBottom: 7,
-  },
   bookAttributionInputRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "transparent",
+    backgroundColor: "#FFFDF8",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.16)",
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
   },
   bookAttributionInput: {
     flex: 1,
     minWidth: 0,
     color: colors.text,
-    fontSize: 20,
-    lineHeight: 25,
+    fontSize: 21,
+    lineHeight: 27,
     fontWeight: "800",
     padding: 0,
   },
@@ -7901,23 +8032,94 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 8,
   },
-  bookAttributionSaveButton: {
-    backgroundColor: colors.accentDark,
-    borderRadius: 999,
-    paddingVertical: 15,
-    alignItems: "center",
-    marginTop: 14,
-    shadowColor: "#315F52",
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 3,
+  bookAttributionReviewCard: {
+    backgroundColor: "rgba(255,255,255,0.74)",
+    borderRadius: 24,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.09)",
+    ...softCardShadow,
   },
-  bookAttributionSaveButtonText: {
-    color: "#FFF8ED",
+  bookAttributionReviewTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "transparent",
+  },
+  bookAttributionReviewCover: {
+    width: 54,
+    height: 74,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#1E3E32",
+    overflow: "hidden",
+  },
+  bookAttributionReviewCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  bookAttributionReviewTitle: {
+    color: colors.text,
+    fontSize: 16,
+    lineHeight: 21,
+    fontWeight: "900",
+    fontFamily: serifFont,
+  },
+  bookAttributionReviewAuthor: {
+    color: "rgba(31,41,51,0.56)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
+    marginTop: 3,
+  },
+  bookEditButton: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(47,93,80,0.07)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+    borderRadius: 999,
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+  },
+  bookEditButtonHeader: {
+    alignSelf: "center",
+    backgroundColor: "rgba(255,255,255,0.42)",
+  },
+  bookEditButtonText: {
+    color: "rgba(47,93,80,0.72)",
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "800",
+  },
+  bookReflectionCard: {
+    marginTop: 12,
+    backgroundColor: "rgba(255,255,255,0.58)",
+    borderRadius: 22,
+    padding: 13,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.07)",
+  },
+  bookReflectionLabel: {
+    color: "rgba(47,93,80,0.62)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "800",
+    marginBottom: 8,
+  },
+  bookReflectionInput: {
+    minHeight: 82,
+    backgroundColor: "#FFFDF8",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.12)",
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: colors.text,
     fontSize: 15,
     lineHeight: 21,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   bookLookupPanel: {
     marginTop: 14,
@@ -8037,19 +8239,19 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   recentBookPicker: {
-    marginTop: 18,
-    backgroundColor: "rgba(255,255,255,0.54)",
-    borderRadius: 24,
-    padding: 14,
+    marginTop: 12,
+    backgroundColor: "rgba(255,255,255,0.46)",
+    borderRadius: 22,
+    padding: 12,
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.07)",
+    borderColor: "rgba(47,93,80,0.055)",
   },
   recentBookPickerTitle: {
     color: "rgba(31,41,51,0.58)",
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "900",
-    marginBottom: 10,
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "800",
+    marginBottom: 8,
   },
   recentBookChoice: {
     flexDirection: "row",
@@ -8095,13 +8297,35 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     marginTop: 2,
   },
-  bookCompletedCard: {
-    marginTop: 18,
-    backgroundColor: "rgba(255,255,255,0.54)",
-    borderRadius: 24,
-    padding: 14,
+  bookManualEntryHint: {
+    marginTop: 12,
+    backgroundColor: "rgba(47,93,80,0.055)",
+    borderRadius: 18,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.07)",
+    borderColor: "rgba(47,93,80,0.06)",
+  },
+  bookManualEntryHintTitle: {
+    color: colors.text,
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: "800",
+    marginBottom: 2,
+  },
+  bookManualEntryHintText: {
+    color: "rgba(31,41,51,0.58)",
+    fontSize: 13,
+    lineHeight: 19,
+    fontWeight: "600",
+  },
+  bookCompletedCard: {
+    marginTop: 12,
+    backgroundColor: "rgba(255,255,255,0.42)",
+    borderRadius: 22,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.055)",
   },
   bookCompletedToggle: {
     flexDirection: "row",
@@ -8174,6 +8398,12 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: "center",
   },
+  bookReturnSecondaryButtonFinal: {
+    flex: 0,
+    width: "100%",
+    backgroundColor: "transparent",
+    borderColor: "rgba(47,93,80,0.10)",
+  },
   bookReturnSecondaryButtonText: {
     color: "rgba(47,93,80,0.72)",
     fontSize: 15,
@@ -8187,11 +8417,31 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: "center",
   },
+  bookReturnSaveButtonFinal: {
+    flex: 0,
+    width: "100%",
+  },
+  bookReturnSaveButtonDisabled: {
+    backgroundColor: "rgba(47,93,80,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+  },
   bookReturnSaveButtonText: {
     color: "#FFF8ED",
     fontSize: 15,
     lineHeight: 21,
     fontWeight: "900",
+  },
+  bookReturnSaveButtonTextDisabled: {
+    color: "rgba(47,93,80,0.42)",
+  },
+  bookAttributionBottomActions: {
+    marginTop: 18,
+  },
+  bookAttributionBottomActionsFinal: {
+    flexDirection: "column-reverse",
+    gap: 10,
+    marginTop: 20,
   },
   bookRevealScreen: {
     flex: 1,
@@ -8212,10 +8462,10 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   bookRevealFooter: {
-    backgroundColor: "rgba(247,243,234,0.94)",
+    backgroundColor: "transparent",
     paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(47,93,80,0.07)",
+    borderTopWidth: 0,
+    borderTopColor: "transparent",
   },
   bookRevealInlineActions: {
     width: "100%",
@@ -8343,6 +8593,14 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 18,
     marginTop: 5,
+  },
+  bookRevealNoteSaved: {
+    color: "rgba(47,93,80,0.62)",
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: "600",
+    textAlign: "center",
+    marginTop: 4,
   },
   bookRevealContinueButton: {
     backgroundColor: colors.accentDark,
