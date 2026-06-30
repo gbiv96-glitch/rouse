@@ -11,6 +11,7 @@ import {
   Image,
   Keyboard,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -1982,8 +1983,15 @@ export default function HomeScreen() {
     };
   };
 
-  const saveBookForSession = async () => {
-    if (!beginSavingAction("bookInput")) return;
+  const saveBookForSession = async (
+    options: {
+      reflectionOverride?: string;
+      savingAction?: Exclude<SavingAction, null>;
+    } = {},
+  ) => {
+    const savingAction = options.savingAction ?? "bookInput";
+
+    if (!beginSavingAction(savingAction)) return;
 
     setBookInputError(null);
 
@@ -1991,6 +1999,8 @@ export default function HomeScreen() {
       const validBookTitle = getValidBookTitle(bookTitle);
       const titleToSave = validBookTitle || UNATTACHED_SESSION_TITLE;
       const shouldCompleteBook = showBookCompletedInput && Boolean(validBookTitle);
+      const reflectionToSave =
+        options.reflectionOverride ?? completedBookReview;
       const selectedMetadata =
         validBookTitle &&
         selectedBookMetadata?.title.trim() === validBookTitle
@@ -2003,7 +2013,7 @@ export default function HomeScreen() {
       const savedSession = await saveSession(
         titleToSave,
         selectedMetadata,
-        completedBookReview,
+        reflectionToSave,
       );
 
       if (showBookCompletedInput && !validBookTitle) {
@@ -2043,7 +2053,7 @@ export default function HomeScreen() {
       }
 
       setShowBookCompletedInput(false);
-      if (!shouldCompleteBook) {
+      if (!shouldCompleteBook || options.reflectionOverride !== undefined) {
         setCompletedBookReview("");
       }
       setBookAttributionStep("choose");
@@ -2062,6 +2072,13 @@ export default function HomeScreen() {
     } finally {
       endSavingAction();
     }
+  };
+
+  const skipBookExtrasForSession = async () => {
+    await saveBookForSession({
+      reflectionOverride: "",
+      savingAction: "bookInputSkip",
+    });
   };
 
   const skipBookForSession = async () => {
@@ -2287,6 +2304,27 @@ export default function HomeScreen() {
     setCompletedBookMoment(null);
     setSessionMessage(null);
     setScreen("manualLog");
+  };
+
+  const openFeedbackEmail = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+    const subject = encodeURIComponent("Rousd Feedback");
+    const body = encodeURIComponent(
+      "What felt good?\n\nWhat felt confusing?\n\nWhat would you want Rousd to help with?",
+    );
+
+    try {
+      await Linking.openURL(
+        `mailto:gbiv.96@gmail.com?subject=${subject}&body=${body}`,
+      );
+    } catch (error) {
+      console.warn("Rousd could not open the email client.", error);
+      Alert.alert(
+        "Feedback can be sent manually",
+        "Your email app didn't open. You can still send your thoughts from your usual mail app when you're ready.",
+      );
+    }
   };
 
   const openHomeDestination = async (destination: Screen) => {
@@ -2516,7 +2554,7 @@ export default function HomeScreen() {
       : "Saved as your current book"
     : hasReadingMoments
       ? "Save a reading moment to place a book here"
-      : "Start when you're ready, then save the book you read.";
+      : "Select what you read after the session";
   const shouldShowCurrentBookPlaceholderMark =
     !currentBookTitle &&
     (!latestSession || isUnattachedSessionTitle(latestSession.title));
@@ -2640,7 +2678,10 @@ export default function HomeScreen() {
       <ThemedView
         style={[
           styles.closeTransitionScreen,
-          { paddingTop: insets.top + 36 },
+          {
+            marginTop: -insets.top,
+            paddingTop: insets.top * 2 + 36,
+          },
         ]}
       >
         <StatusBar style="light" />
@@ -2681,7 +2722,10 @@ export default function HomeScreen() {
       <ThemedView
         style={[
           styles.ritualTransitionScreen,
-          { paddingTop: insets.top + 36 },
+          {
+            marginTop: -insets.top,
+            paddingTop: insets.top * 2 + 36,
+          },
         ]}
       >
         <StatusBar style="light" />
@@ -2733,7 +2777,13 @@ export default function HomeScreen() {
     case "active":
       return (
       <ThemedView
-        style={[styles.sessionScreen, { paddingTop: insets.top + 36 }]}
+        style={[
+          styles.sessionScreen,
+          {
+            marginTop: -insets.top,
+            paddingTop: insets.top * 2 + 36,
+          },
+        ]}
       >
         <StatusBar style="light" />
         <View style={styles.dimLayer} />
@@ -2850,9 +2900,23 @@ export default function HomeScreen() {
         : isSavingAttributionBook
           ? "Saving..."
           : "Save to this book";
-      const handleAttributionPrimaryPress = isChoosingBook
-        ? continueToAttributionReflection
-        : saveBookForSession;
+      const handleAttributionPrimaryPress = () => {
+        if (isChoosingBook) {
+          continueToAttributionReflection();
+          return;
+        }
+
+        void saveBookForSession();
+      };
+      const handleAttributionSecondaryPress = isChoosingBook
+        ? skipBookForSession
+        : skipBookExtrasForSession;
+      const attributionSecondaryLabel =
+        isSavingAttributionSkip
+          ? "Saving..."
+          : !isChoosingBook && hasAttributionBook
+            ? "Skip note"
+            : "Not this time";
 
       return (
       <ThemedView
@@ -3287,10 +3351,10 @@ export default function HomeScreen() {
                 pressed && styles.buttonPressed,
               ]}
               disabled={isSavingAttribution}
-              onPress={skipBookForSession}
+              onPress={handleAttributionSecondaryPress}
             >
               <ThemedText style={styles.bookReturnSecondaryButtonText}>
-                {isSavingAttributionSkip ? "Saving..." : "Not this time"}
+                {attributionSecondaryLabel}
               </ThemedText>
             </Pressable>
             <Pressable
@@ -3368,7 +3432,13 @@ export default function HomeScreen() {
 
       return (
       <ThemedView
-        style={[styles.closeSessionScreen, { paddingTop: insets.top + 22 }]}
+        style={[
+          styles.closeSessionScreen,
+          {
+            marginTop: -insets.top,
+            paddingTop: insets.top * 2 + 22,
+          },
+        ]}
       >
         <StatusBar style="light" />
         <View style={styles.sessionGlowOne} />
@@ -3953,25 +4023,25 @@ export default function HomeScreen() {
       );
       const revealFooterBottomPadding = isKeyboardVisible
         ? isUnattachedReveal
-          ? 10
-          : 12
+          ? 8
+          : 10
         : isUnattachedReveal
-          ? Math.max(insets.bottom + 4, 16)
-          : Math.max(insets.bottom + 10, 22);
+          ? Math.max(insets.bottom + 2, 12)
+          : Math.max(insets.bottom + 4, 16);
       const revealScrollBottomPadding = isKeyboardVisible
         ? isUnattachedReveal
-          ? 200
-          : 220
+          ? 176
+          : 190
         : isUnattachedReveal
-          ? 8
-          : 24;
+          ? 0
+          : 8;
       const revealMainCopy = isUnattachedReveal
         ? "This moment has a place now."
         : "This book has a little more history now.";
 
       return (
       <ThemedView
-        style={[styles.bookRevealScreen, { paddingTop: insets.top + 18 }]}
+        style={[styles.bookRevealScreen, { paddingTop: insets.top + 10 }]}
       >
         <View pointerEvents="none" style={styles.bookReturnGlowTop} />
         <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
@@ -4616,6 +4686,30 @@ export default function HomeScreen() {
                 />
               </Pressable>
             </View>
+
+            <Pressable
+              style={({ pressed }) => [
+                styles.menuFeedbackCard,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={openFeedbackEmail}
+            >
+              <View style={styles.menuFeedbackIconCircle}>
+                <Ionicons
+                  name="mail-outline"
+                  size={18}
+                  color="rgba(47,93,80,0.58)"
+                />
+              </View>
+              <View style={styles.menuNavCopy}>
+                <ThemedText style={styles.menuFeedbackTitle}>
+                  Send Feedback
+                </ThemedText>
+                <ThemedText style={styles.menuFeedbackSubtext}>
+                  Tell us what felt good or confusing.
+                </ThemedText>
+              </View>
+            </Pressable>
           </ScrollView>
         </ThemedView>
       );
@@ -4751,6 +4845,14 @@ export default function HomeScreen() {
                 minimumFontScale={0.88}
               >
                 Start reading
+              </ThemedText>
+              <ThemedText
+                style={styles.startHeroHelper}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.86}
+              >
+                Select what you read after the session
               </ThemedText>
             </View>
             <View style={styles.startHeroArrowCircle}>
@@ -5809,10 +5911,11 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   startHero: {
-    minHeight: 82,
+    minHeight: 90,
     marginTop: 2,
     backgroundColor: "#1F4F3B",
     borderRadius: 28,
+    paddingVertical: 15,
     paddingHorizontal: 24,
     justifyContent: "center",
     shadowColor: "#315F52",
@@ -5831,6 +5934,7 @@ const styles = StyleSheet.create({
   startHeroCopy: {
     flex: 1,
     minWidth: 0,
+    alignItems: "center",
   },
   startHeroTitle: {
     color: "#FFFFFF",
@@ -5838,6 +5942,18 @@ const styles = StyleSheet.create({
     lineHeight: 30,
     fontWeight: "700",
     letterSpacing: 0,
+    flexShrink: 1,
+    textAlign: "center",
+  },
+  startHeroHelper: {
+    color: "rgba(255,248,237,0.68)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontStyle: "italic",
+    fontWeight: "500",
+    letterSpacing: 0,
+    marginTop: 2,
+    textAlign: "center",
     flexShrink: 1,
   },
   startHeroArrowCircle: {
@@ -6321,6 +6437,41 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     marginTop: 2,
   },
+  menuFeedbackCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "rgba(255,248,237,0.42)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.055)",
+    borderRadius: 20,
+    paddingVertical: 13,
+    paddingHorizontal: 15,
+    marginTop: 18,
+  },
+  menuFeedbackIconCircle: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(47,93,80,0.045)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.055)",
+  },
+  menuFeedbackTitle: {
+    color: "rgba(31,41,51,0.76)",
+    fontSize: 15,
+    lineHeight: 21,
+    fontWeight: "600",
+  },
+  menuFeedbackSubtext: {
+    color: "rgba(31,41,51,0.46)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "500",
+    marginTop: 2,
+  },
   diaryTitle: {
     color: "#1B2A22",
     fontSize: 42,
@@ -6794,7 +6945,7 @@ const styles = StyleSheet.create({
   },
   sessionScreen: {
     flex: 1,
-    backgroundColor: "#081C16",
+    backgroundColor: "#06130F",
     paddingHorizontal: 30,
     paddingTop: 80,
     paddingBottom: 46,
@@ -8459,11 +8610,12 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "center",
     backgroundColor: "transparent",
-    paddingVertical: 10,
+    paddingTop: 0,
+    paddingBottom: 2,
   },
   bookRevealFooter: {
     backgroundColor: "transparent",
-    paddingTop: 6,
+    paddingTop: 0,
     borderTopWidth: 0,
     borderTopColor: "transparent",
   },
@@ -8510,14 +8662,14 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.08)",
-    marginBottom: 12,
+    marginBottom: 6,
     ...cardShadow,
   },
   bookRevealCardCompact: {
     gap: 12,
     padding: 12,
     borderRadius: 24,
-    marginBottom: 8,
+    marginBottom: 4,
   },
   bookRevealCover: {
     width: 86,
