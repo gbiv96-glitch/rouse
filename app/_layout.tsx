@@ -5,6 +5,18 @@ import 'react-native-reanimated';
 
 import { RousdPalette } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import * as Sentry from '@sentry/react-native';
+
+Sentry.init({
+  dsn: 'https://7464b16b60bdbba00951a5533c3729ad@o4511662991736832.ingest.us.sentry.io/4511662995537920',
+
+  // Keep crash reports privacy-conscious for Rousd.
+  // Do not collect default PII unless we intentionally revisit privacy policy and consent.
+  sendDefaultPii: false,
+
+  // uncomment the line below to enable Spotlight (https://spotlightjs.com)
+  // spotlight: __DEV__,
+});
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -36,7 +48,7 @@ const rousdDarkTheme = {
   },
 };
 
-export default function RootLayout() {
+export default Sentry.wrap(function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
@@ -47,4 +59,4 @@ export default function RootLayout() {
       <StatusBar style="dark" />
     </ThemeProvider>
   );
-}
+});

@@ -44,6 +44,14 @@
             "backgroundColor": "#F7F3EA"
           }
         }
+      ],
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "project": "react-native",
+          "organization": "rousd"
+        }
       ]
     ],
     "experiments": {
