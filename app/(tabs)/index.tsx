@@ -42,6 +42,7 @@ const ACTIVE_SESSION_TODAY_START_SECONDS_KEY =
   "activeReadingSessionTodayStartSeconds";
 const ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY =
   "activeReadingSessionLifetimeStartSeconds";
+const PENDING_POST_SESSION_DRAFT_KEY = "pendingPostSessionDraft";
 const LEGACY_UNATTACHED_SESSION_TITLE = "Unassigned reading";
 const UNATTACHED_SESSION_TITLE = "A reading moment";
 const UNATTACHED_SESSION_DISPLAY_TITLE = "A reading moment";
@@ -108,6 +109,18 @@ type Screen =
 type LibraryReturnTarget = "home" | "menu";
 
 type BookAttributionStep = "choose" | "reflect";
+
+type PendingPostSessionDraft = {
+  version: 1;
+  sessionId: string;
+  sessionSeconds: number;
+  endedAt: string;
+  bookTitle?: string;
+  bookAttributionStep?: BookAttributionStep;
+  completedBookReview?: string;
+  showBookCompletedInput?: boolean;
+  selectedBookMetadata?: BookMetadata | null;
+};
 
 type SavingAction =
   | "bookInput"
@@ -590,6 +603,92 @@ function parseReadingSessions(rawValue: string) {
   }
 }
 
+function sanitizePendingPostSessionDraft(
+  value: unknown,
+): PendingPostSessionDraft | null {
+  if (!isRecord(value)) return null;
+
+  const sessionSeconds =
+    typeof value.sessionSeconds === "number"
+      ? value.sessionSeconds
+      : Number(value.sessionSeconds);
+  const sessionId = coerceString(value.sessionId).trim();
+  const endedAt = coerceIsoDate(value.endedAt, "");
+
+  if (
+    !sessionId ||
+    !Number.isFinite(sessionSeconds) ||
+    sessionSeconds <= 0 ||
+    !endedAt
+  ) {
+    return null;
+  }
+
+  const rawAttributionStep = coerceString(value.bookAttributionStep);
+  const bookAttributionStep: BookAttributionStep =
+    rawAttributionStep === "reflect" ? "reflect" : "choose";
+  const rawSelectedBookMetadata = isRecord(value.selectedBookMetadata)
+    ? value.selectedBookMetadata
+    : null;
+  const selectedBookMetadataTitle = coerceString(
+    rawSelectedBookMetadata?.title,
+  ).trim();
+  const selectedBookMetadata = selectedBookMetadataTitle
+    ? ({
+        title: selectedBookMetadataTitle,
+        author: coerceAuthor(rawSelectedBookMetadata?.author),
+        coverUrl: normalizeStoredCoverUrl(
+          coerceNullableString(rawSelectedBookMetadata?.coverUrl),
+        ),
+        googleBooksId: coerceNullableString(
+          rawSelectedBookMetadata?.googleBooksId,
+        ),
+        isbn10: coerceNullableString(rawSelectedBookMetadata?.isbn10),
+        isbn13: coerceNullableString(rawSelectedBookMetadata?.isbn13),
+        source:
+          coerceBookSource(
+            rawSelectedBookMetadata?.source ??
+              rawSelectedBookMetadata?.bookSource,
+          ) ?? "googleBooks",
+      } satisfies BookMetadata)
+    : null;
+
+  return {
+    version: 1,
+    sessionId,
+    sessionSeconds,
+    endedAt,
+    bookTitle: coerceString(value.bookTitle),
+    bookAttributionStep,
+    completedBookReview: coerceString(value.completedBookReview),
+    showBookCompletedInput: value.showBookCompletedInput === true,
+    selectedBookMetadata,
+  };
+}
+
+function parsePendingPostSessionDraft(rawValue: string) {
+  try {
+    const parsedValue: unknown = JSON.parse(rawValue);
+    return sanitizePendingPostSessionDraft(parsedValue);
+  } catch (error) {
+    warnInDev("Rousd ignored malformed pending post-session draft.", error);
+    return null;
+  }
+}
+
+async function persistPendingPostSessionDraft(
+  draft: PendingPostSessionDraft,
+) {
+  await AsyncStorage.setItem(
+    PENDING_POST_SESSION_DRAFT_KEY,
+    JSON.stringify(draft),
+  );
+}
+
+async function clearPendingPostSessionDraft() {
+  await AsyncStorage.removeItem(PENDING_POST_SESSION_DRAFT_KEY);
+}
+
 function sanitizeCompletedBook(
   value: unknown,
   index: number,
@@ -768,6 +867,9 @@ export default function HomeScreen() {
   const [activeSessionStartTime, setActiveSessionStartTime] = useState<
     number | null
   >(null);
+  const [pendingPostSessionId, setPendingPostSessionId] = useState<string | null>(
+    null,
+  );
   const [pendingSessionSeconds, setPendingSessionSeconds] = useState(0);
   const [screen, setScreen] = useState<Screen>("loading");
   const [libraryReturnTarget, setLibraryReturnTarget] =
@@ -910,6 +1012,7 @@ export default function HomeScreen() {
       );
       setIsReading(false);
       setActiveSessionStartTime(null);
+      setPendingPostSessionId(null);
       setPendingSessionSeconds(0);
       setSessionMessage(null);
       void AsyncStorage.multiRemove([
@@ -929,6 +1032,7 @@ export default function HomeScreen() {
         "Rousd post-session screen opened without pending session time; returning home.",
       );
       setPendingSessionSeconds(0);
+      setPendingPostSessionId(null);
       setShowBookCompletedInput(false);
       setCompletedBookReview("");
       setCompletedBookReviewError(null);
@@ -939,6 +1043,7 @@ export default function HomeScreen() {
       setIsBookLookupRequested(false);
       setHasBookLookupSearched(false);
       setHasUserEditedBookQuery(false);
+      void clearPendingPostSessionDraft();
       setScreen("home");
       return;
     }
@@ -982,6 +1087,42 @@ export default function HomeScreen() {
     sanctuaryReveal,
     screen,
     selectedFinishedBook,
+  ]);
+
+  useEffect(() => {
+    const hasPendingSessionDuration =
+      Number.isFinite(pendingSessionSeconds) && pendingSessionSeconds > 0;
+
+    if (
+      !isLoaded ||
+      !hasPendingSessionDuration ||
+      !pendingPostSessionId ||
+      (screen !== "closeTransition" && screen !== "bookInput")
+    ) {
+      return;
+    }
+
+    void persistPendingPostSessionDraft({
+      version: 1,
+      sessionId: pendingPostSessionId,
+      sessionSeconds: pendingSessionSeconds,
+      endedAt: new Date().toISOString(),
+      bookTitle,
+      bookAttributionStep,
+      completedBookReview,
+      showBookCompletedInput,
+      selectedBookMetadata,
+    });
+  }, [
+    bookAttributionStep,
+    bookTitle,
+    completedBookReview,
+    isLoaded,
+    pendingPostSessionId,
+    pendingSessionSeconds,
+    screen,
+    selectedBookMetadata,
+    showBookCompletedInput,
   ]);
 
   useEffect(() => {
@@ -1416,6 +1557,7 @@ export default function HomeScreen() {
   useEffect(() => {
     const loadSavedData = async () => {
       let nextScreen: Screen = "home";
+      let loadedRecentSessions: ReadingSession[] = [];
 
       try {
         const savedSeconds = await AsyncStorage.getItem(SECONDS_KEY);
@@ -1439,6 +1581,9 @@ export default function HomeScreen() {
         );
         const savedActiveSessionLifetimeStartSeconds =
           await AsyncStorage.getItem(ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY);
+        const savedPendingPostSessionDraft = await AsyncStorage.getItem(
+          PENDING_POST_SESSION_DRAFT_KEY,
+        );
 
         const today = getTodayDateString();
         const savedTodaySeconds = getFiniteStoredNumber(savedSeconds, 0);
@@ -1459,6 +1604,7 @@ export default function HomeScreen() {
           } = parseReadingSessions(savedSessions);
 
           setRecentSessions(migratedSessions);
+          loadedRecentSessions = migratedSessions;
 
           if (shouldPersistMigratedSessions) {
             await AsyncStorage.setItem(
@@ -1512,7 +1658,10 @@ export default function HomeScreen() {
           nextScreen = "welcome";
         }
 
-        if (savedActiveSessionStartTime !== null) {
+        const hasActiveSessionRestore = savedActiveSessionStartTime !== null;
+        let didRestoreActiveSession = false;
+
+        if (hasActiveSessionRestore) {
           const restoredStartTime = Number(savedActiveSessionStartTime);
           const restoredTodayStartSeconds =
             savedActiveSessionTodayStartSeconds !== null
@@ -1536,6 +1685,7 @@ export default function HomeScreen() {
             setSeconds(restoredTodayStartSeconds + elapsed);
             setLifetimeSeconds(restoredLifetimeStartSeconds + elapsed);
             setIsReading(true);
+            didRestoreActiveSession = true;
             nextScreen = "active";
           } else {
             warnInDev(
@@ -1549,12 +1699,53 @@ export default function HomeScreen() {
           }
         }
 
+        if (!didRestoreActiveSession && savedPendingPostSessionDraft !== null) {
+          const pendingDraft = parsePendingPostSessionDraft(
+            savedPendingPostSessionDraft,
+          );
+
+          if (pendingDraft) {
+            const sessionAlreadySaved = loadedRecentSessions.some(
+              (session) => session.id === pendingDraft.sessionId,
+            );
+
+            if (sessionAlreadySaved) {
+              await AsyncStorage.removeItem(PENDING_POST_SESSION_DRAFT_KEY);
+              nextScreen = "home";
+            } else {
+              setPendingPostSessionId(pendingDraft.sessionId);
+              setPendingSessionSeconds(pendingDraft.sessionSeconds);
+              setBookTitle(pendingDraft.bookTitle ?? savedCurrentBook ?? "");
+              setBookAttributionStep(
+                pendingDraft.bookAttributionStep ?? "choose",
+              );
+              setCompletedBookReview(pendingDraft.completedBookReview ?? "");
+              setShowBookCompletedInput(
+                pendingDraft.showBookCompletedInput === true,
+              );
+              setSelectedBookMetadata(pendingDraft.selectedBookMetadata ?? null);
+              setBookInputError(null);
+              setCompletedBookReviewError(null);
+              setHasUserEditedBookQuery(false);
+              setIsBookLookupRequested(false);
+              setBookLookupResults([]);
+              setBookLookupError(false);
+              nextScreen = "bookInput";
+            }
+          } else {
+            await AsyncStorage.removeItem(PENDING_POST_SESSION_DRAFT_KEY);
+            nextScreen = "home";
+          }
+        }
+
         if (
           savedCurrentBook !== null &&
           !isUnattachedSessionTitle(savedCurrentBook)
         ) {
           setCurrentBookTitle(savedCurrentBook);
-          setBookTitle(savedCurrentBook);
+          if (nextScreen !== "bookInput") {
+            setBookTitle(savedCurrentBook);
+          }
         }
       } catch (error) {
         console.log("Failed to load Rousd data:", error);
@@ -1660,6 +1851,7 @@ export default function HomeScreen() {
       setSessionStartSeconds(seconds);
       setLifetimeSessionStartSeconds(lifetimeSeconds);
       setActiveSessionStartTime(now);
+      setPendingPostSessionId(null);
       setPendingSessionSeconds(0);
       setSessionMessage(null);
       setSanctuaryReveal(null);
@@ -1683,9 +1875,33 @@ export default function HomeScreen() {
       const updatedLifetimeSeconds =
         lifetimeSessionStartSeconds + sessionSeconds;
       const sessionDuration = formatDuration(sessionSeconds / 60);
+      const sessionId = Date.now().toString();
+      const pendingDraft: PendingPostSessionDraft = {
+        version: 1,
+        sessionId,
+        sessionSeconds,
+        endedAt: new Date().toISOString(),
+        bookTitle: currentBookTitle,
+        bookAttributionStep: "choose",
+        completedBookReview: "",
+        showBookCompletedInput: false,
+        selectedBookMetadata: null,
+      };
+
+      await AsyncStorage.multiSet([
+        [SECONDS_KEY, String(updatedTodaySeconds)],
+        [LIFETIME_SECONDS_KEY, String(updatedLifetimeSeconds)],
+        [PENDING_POST_SESSION_DRAFT_KEY, JSON.stringify(pendingDraft)],
+      ]);
+      await AsyncStorage.multiRemove([
+        ACTIVE_SESSION_START_KEY,
+        ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
+        ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
+      ]);
 
       setSeconds(updatedTodaySeconds);
       setLifetimeSeconds(updatedLifetimeSeconds);
+      setPendingPostSessionId(sessionId);
       setPendingSessionSeconds(sessionSeconds);
       setBookTitle(currentBookTitle);
       setSelectedBookMetadata(null);
@@ -1695,16 +1911,6 @@ export default function HomeScreen() {
       setIsReading(false);
       setActiveSessionStartTime(null);
       setScreen("closeTransition");
-
-      await AsyncStorage.multiSet([
-        [SECONDS_KEY, String(updatedTodaySeconds)],
-        [LIFETIME_SECONDS_KEY, String(updatedLifetimeSeconds)],
-      ]);
-      await AsyncStorage.multiRemove([
-        ACTIVE_SESSION_START_KEY,
-        ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
-        ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
-      ]);
     }
   };
 
@@ -1913,7 +2119,7 @@ export default function HomeScreen() {
         : ({ bookSource: "manual" } satisfies BookMetadataFields);
 
     const newSession: ReadingSession = {
-      id: Date.now().toString(),
+      id: pendingPostSessionId ?? Date.now().toString(),
       title,
       minutes: sessionMinutes,
       createdAt: new Date().toISOString(),
@@ -1952,11 +2158,17 @@ export default function HomeScreen() {
         String(updatedTotalCompletedSessions),
       ],
     ]);
+    try {
+      await clearPendingPostSessionDraft();
+    } catch (error) {
+      warnInDev("Rousd could not clear the pending post-session draft.", error);
+    }
 
     const isUnattachedSession = isUnattachedSessionTitle(title);
 
     setRecentSessions(updatedSessions);
     setTotalCompletedSessions(updatedTotalCompletedSessions);
+    setPendingPostSessionId(null);
     setSessionReflectionError(null);
     setSanctuaryReveal({
       sessionId: newSession.id,
@@ -3224,6 +3436,12 @@ export default function HomeScreen() {
                   You can add it manually.
                 </ThemedText>
               </View>
+              ) : null}
+
+              {!canCompleteBook ? (
+                <ThemedText style={styles.bookCompletedDisabledHelper}>
+                  Add a book title above to mark it finished.
+                </ThemedText>
               ) : null}
             </>
           ) : (
