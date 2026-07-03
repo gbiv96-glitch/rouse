@@ -46,6 +46,16 @@ type GoogleBooksSearchResponse = {
   items?: GoogleBooksVolume[];
 };
 
+const warnInDev = (message: string, detail?: unknown) => {
+  if (!__DEV__) return;
+
+  if (detail) {
+    console.warn(message, detail);
+  } else {
+    console.warn(message);
+  }
+};
+
 const fetchWithTimeout = async (url: string): Promise<Response> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => {
@@ -111,7 +121,7 @@ const readResponseBodyForDebug = async (response: Response): Promise<string> => 
     const body = await response.text();
     return body.length > 1200 ? `${body.slice(0, 1200)}... [truncated]` : body;
   } catch (error) {
-    console.warn("Google Books lookup failed to read error response body", error);
+    warnInDev("Google Books lookup failed to read error response body", error);
     return "[unreadable response body]";
   }
 };
@@ -175,7 +185,7 @@ export async function searchGoogleBooks(query: string): Promise<BookMetadata[]> 
     const hasApiKey = Boolean(apiKey);
 
     if (!hasApiKey && !hasWarnedMissingGoogleBooksApiKey) {
-      console.warn(
+      warnInDev(
         "Google Books API key is missing from this build. Check EXPO_PUBLIC_GOOGLE_BOOKS_API_KEY in the EAS build environment.",
       );
       hasWarnedMissingGoogleBooksApiKey = true;
@@ -192,15 +202,19 @@ export async function searchGoogleBooks(query: string): Promise<BookMetadata[]> 
     const response = await fetchWithTimeout(url);
 
     if (!response.ok) {
-      const responseBody = await readResponseBodyForDebug(response);
-      console.warn(
+      const responseBody = __DEV__
+        ? await readResponseBodyForDebug(response)
+        : undefined;
+      warnInDev(
         `Google Books lookup failed with status ${response.status} ${response.statusText}`,
         responseBody,
       );
 
       if (response.status === 429) {
         lastLookupStatus = "rateLimited";
-        console.warn("Google Books lookup rate limited; manual book entry remains available.");
+        warnInDev(
+          "Google Books lookup rate limited; manual book entry remains available.",
+        );
         return [];
       }
 
@@ -220,7 +234,7 @@ export async function searchGoogleBooks(query: string): Promise<BookMetadata[]> 
     return results;
   } catch (error) {
     lastLookupStatus = "error";
-    console.warn("Google Books lookup failed", error);
+    warnInDev("Google Books lookup failed", error);
     return [];
   }
 }

@@ -1242,7 +1242,7 @@ export default function HomeScreen() {
           return;
         }
 
-        console.warn("Rousd Google Books lookup could not finish", error);
+        warnInDev("Rousd Google Books lookup could not finish", error);
         setBookLookupResults([]);
         setHasBookLookupSearched(true);
         setBookLookupError(true);
@@ -1748,7 +1748,7 @@ export default function HomeScreen() {
           }
         }
       } catch (error) {
-        console.log("Failed to load Rousd data:", error);
+        warnInDev("Failed to load Rousd data:", error);
       } finally {
         setScreen(nextScreen);
         setIsLoaded(true);
@@ -2026,7 +2026,7 @@ export default function HomeScreen() {
           return;
         }
 
-        console.warn("Rousd Google Books lookup could not finish", error);
+        warnInDev("Rousd Google Books lookup could not finish", error);
         setManualBookLookupResults([]);
         setHasManualBookLookupSearched(true);
         setManualBookLookupError(true);
@@ -2229,7 +2229,7 @@ export default function HomeScreen() {
       );
 
       if (showBookCompletedInput && !validBookTitle) {
-        console.warn(
+        warnInDev(
           "Rousd skipped completed-book save because no valid book title was entered.",
         );
         setCompletedBookReview("");
@@ -2279,7 +2279,7 @@ export default function HomeScreen() {
         setSessionMessage(null);
       }, 4000);
     } catch (error) {
-      console.warn("Rousd failed to save timed reading session.", error);
+      warnInDev("Rousd failed to save timed reading session.", error);
       setBookInputError("That didn't save. Try once more.");
     } finally {
       endSavingAction();
@@ -2315,7 +2315,7 @@ export default function HomeScreen() {
         setSessionMessage(null);
       }, 3000);
     } catch (error) {
-      console.warn("Rousd failed to save timed reading session.", error);
+      warnInDev("Rousd failed to save timed reading session.", error);
       setBookInputError("That didn't save. Try once more.");
     } finally {
       endSavingAction();
@@ -2484,7 +2484,7 @@ export default function HomeScreen() {
         completedBookMoment,
       );
     } catch (error) {
-      console.warn("Rousd failed to save finished book review.", error);
+      warnInDev("Rousd failed to save finished book review.", error);
       setCompletedBookReviewError("That review didn't save. Try once more.");
       return false;
     } finally {
@@ -2531,7 +2531,7 @@ export default function HomeScreen() {
         `mailto:gbiv.96@gmail.com?subject=${subject}&body=${body}`,
       );
     } catch (error) {
-      console.warn("Rousd could not open the email client.", error);
+      warnInDev("Rousd could not open the email client.", error);
       Alert.alert(
         "Feedback can be sent manually",
         "Your email app didn't open. You can still send your thoughts from your usual mail app when you're ready.",
@@ -2653,7 +2653,7 @@ export default function HomeScreen() {
       await persistTodayDateIfNeeded();
       await AsyncStorage.multiSet(storageUpdates);
     } catch (error) {
-      console.warn("Rousd failed to save manual reading log.", error);
+      warnInDev("Rousd failed to save manual reading log.", error);
       setManualLogError("This moment didn't save yet. Try once more.");
       return;
     } finally {
@@ -2713,7 +2713,7 @@ export default function HomeScreen() {
         await saveSessionReflection();
       }
     } catch (error) {
-      console.warn("Rousd failed to save reading note.", error);
+      warnInDev("Rousd failed to save reading note.", error);
       if (shouldSaveReflection) {
         setSessionReflectionError("That note didn't save. Try once more.");
       }
