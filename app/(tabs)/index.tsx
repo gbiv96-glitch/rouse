@@ -2741,7 +2741,6 @@ export default function HomeScreen() {
     .filter((session) => !isUnattachedSessionTitle(session.title))
     .slice(0, 3);
   const latestSession = recentSessions[0];
-  const hasReadingMoments = recentSessions.length > 0;
   const currentBookSession = currentBookTitle
     ? recentSessions.find(
         (session) =>
@@ -2757,16 +2756,6 @@ export default function HomeScreen() {
     (latestSession
       ? getDisplaySessionTitle(latestSession.title)
       : "A quiet place to begin.");
-  const currentBookSubcopy = hasReadingMoments
-    ? "Pick up where you left off."
-    : "Your first reading moment can begin whenever you're ready.";
-  const currentBookMeta = currentBookTitle
-    ? latestSession?.title === currentBookTitle
-      ? `Last read ${formatCurrentBookTimestamp(latestSession.createdAt)}`
-      : "Saved as your current book"
-    : hasReadingMoments
-      ? "Save a reading moment to place a book here"
-      : "Select what you read after the session";
   const shouldShowCurrentBookPlaceholderMark =
     !currentBookTitle &&
     (!latestSession || isUnattachedSessionTitle(latestSession.title));
@@ -3204,16 +3193,16 @@ export default function HomeScreen() {
           >
             {isChoosingBook ? "What did you read?" : "What stayed with you?"}
           </ThemedText>
-          <ThemedText
-            style={[
-              styles.bookReturnHelperLine,
-              isSearchingForBook && styles.bookReturnHelperLineCompact,
-            ]}
-          >
-            {isChoosingBook
-              ? "Start by choosing the book you just read."
-              : "Add a note if you'd like. Mark it finished if this was the last page."}
-          </ThemedText>
+          {isChoosingBook ? (
+            <ThemedText
+              style={[
+                styles.bookReturnHelperLine,
+                isSearchingForBook && styles.bookReturnHelperLineCompact,
+              ]}
+            >
+              Start by choosing the book you just read.
+            </ThemedText>
+          ) : null}
           {isChoosingBook ? (
             <ThemedText
               style={[
@@ -3440,13 +3429,18 @@ export default function HomeScreen() {
 
               {!canCompleteBook ? (
                 <ThemedText style={styles.bookCompletedDisabledHelper}>
-                  Add a book title above to mark it finished.
+                  Name the book first, then you can mark it finished.
                 </ThemedText>
               ) : null}
             </>
           ) : (
             <>
-              <View style={styles.bookAttributionReviewCard}>
+              <View
+                style={[
+                  styles.bookAttributionReviewCard,
+                  styles.bookAttributionReviewCardStepTwo,
+                ]}
+              >
                 <View style={styles.bookAttributionReviewTopRow}>
                   <View style={styles.bookAttributionReviewCover}>
                     {attributionPreviewCoverUrl ? (
@@ -4436,7 +4430,7 @@ export default function HomeScreen() {
                   No reading moments here yet.
                 </ThemedText>
                 <ThemedText style={styles.diaryEmptySubtext}>
-                  {"Start reading, then come back here whenever you leave a note."}
+                  {"Start reading, then come back here to see what you've kept."}
                 </ThemedText>
               </View>
             ) : (
@@ -4549,10 +4543,10 @@ export default function HomeScreen() {
                 styles.diaryBackButton,
                 pressed && styles.buttonPressed,
               ]}
-              onPress={() => openHomeDestination(libraryReturnScreen)}
+              onPress={() => setScreen("home")}
             >
               <ThemedText style={styles.diaryBackButtonText}>
-                {libraryReturnLabel}
+                Return home
               </ThemedText>
             </Pressable>
 
@@ -4987,19 +4981,6 @@ export default function HomeScreen() {
         <View style={styles.bookShrineHero}>
           <View pointerEvents="none" style={styles.bookShrineWarmGlow} />
 
-          <View style={styles.bookShrineTopRow}>
-            <View style={styles.bookShrineIconPill}>
-              <Ionicons
-                name="book-outline"
-                size={13}
-                color="rgba(47,93,80,0.62)"
-              />
-            </View>
-            <ThemedText style={styles.bookShrineStage}>
-              Currently reading
-            </ThemedText>
-          </View>
-
           <View style={styles.bookShrinePanel}>
             <View style={styles.bookShrineCoverWrap}>
               <View pointerEvents="none" style={styles.bookShrineCoverGlow} />
@@ -5031,12 +5012,6 @@ export default function HomeScreen() {
             <View style={styles.bookShrineCopy}>
               <ThemedText style={styles.bookShrineBookTitle} numberOfLines={3}>
                 {currentBookDisplayTitle}
-              </ThemedText>
-              <ThemedText style={styles.bookShrineSubcopy}>
-                {currentBookSubcopy}
-              </ThemedText>
-              <ThemedText style={styles.bookShrineBookMeta}>
-                {currentBookMeta}
               </ThemedText>
             </View>
           </View>
@@ -5109,25 +5084,23 @@ export default function HomeScreen() {
             ]}
             onPress={() => openHomeDestination("diary")}
           >
-            <View style={styles.homeShortcutTopRow}>
-              <View style={styles.homeShortcutIconCircle}>
-                <Ionicons
-                  name="book-outline"
-                  size={18}
-                  color="rgba(47,93,80,0.72)"
-                />
+            <View style={styles.homeShortcutDestinationRow}>
+              <View style={styles.homeShortcutLabelGroup}>
+                <View style={styles.homeShortcutIconCircle}>
+                  <Ionicons
+                    name="book-outline"
+                    size={20}
+                    color="rgba(47,93,80,0.72)"
+                  />
+                </View>
+                <ThemedText style={styles.homeShortcutTitle}>Diary</ThemedText>
               </View>
               <Ionicons
                 name="chevron-forward"
                 size={16}
-                color="rgba(47,93,80,0.34)"
+                color="rgba(47,93,80,0.30)"
+                style={styles.homeShortcutChevron}
               />
-            </View>
-            <View style={styles.homeShortcutCopy}>
-              <ThemedText style={styles.homeShortcutTitle}>Diary</ThemedText>
-              <ThemedText style={styles.homeShortcutSubtext}>
-                Your private reading journal
-              </ThemedText>
             </View>
           </Pressable>
 
@@ -5138,27 +5111,25 @@ export default function HomeScreen() {
             ]}
             onPress={() => openHomeDestination("finishedBooks")}
           >
-            <View style={styles.homeShortcutTopRow}>
-              <View style={styles.homeShortcutIconCircle}>
-                <Ionicons
-                  name="library-outline"
-                  size={18}
-                  color="rgba(47,93,80,0.72)"
-                />
+            <View style={styles.homeShortcutDestinationRow}>
+              <View style={styles.homeShortcutLabelGroup}>
+                <View style={styles.homeShortcutIconCircle}>
+                  <Ionicons
+                    name="library-outline"
+                    size={20}
+                    color="rgba(47,93,80,0.72)"
+                  />
+                </View>
+                <ThemedText style={styles.homeShortcutTitle}>
+                  Finished Books
+                </ThemedText>
               </View>
               <Ionicons
                 name="chevron-forward"
                 size={16}
-                color="rgba(47,93,80,0.34)"
+                color="rgba(47,93,80,0.30)"
+                style={styles.homeShortcutChevron}
               />
-            </View>
-            <View style={styles.homeShortcutCopy}>
-              <ThemedText style={styles.homeShortcutTitle}>
-                Finished Books
-              </ThemedText>
-              <ThemedText style={styles.homeShortcutSubtext}>
-                Your quiet shelf
-              </ThemedText>
             </View>
           </Pressable>
         </View>
@@ -5296,7 +5267,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 22,
     paddingTop: 46,
     paddingBottom: 54,
-    gap: 10,
+    gap: 12,
     backgroundColor: colors.background,
   },
   warmVignetteTop: {
@@ -6129,8 +6100,8 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   startHero: {
-    minHeight: 90,
-    marginTop: 2,
+    minHeight: 88,
+    marginTop: 4,
     backgroundColor: "#1F4F3B",
     borderRadius: 28,
     paddingVertical: 15,
@@ -6164,9 +6135,9 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   startHeroHelper: {
-    color: "rgba(255,248,237,0.68)",
-    fontSize: 12,
-    lineHeight: 17,
+    color: "rgba(255,248,237,0.58)",
+    fontSize: 11,
+    lineHeight: 16,
     fontStyle: "italic",
     fontWeight: "500",
     letterSpacing: 0,
@@ -6220,11 +6191,11 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   manualLogButton: {
-    backgroundColor: "rgba(255,248,237,0.52)",
+    backgroundColor: "rgba(255,248,237,0.42)",
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.06)",
+    borderColor: "rgba(47,93,80,0.05)",
     borderRadius: 18,
-    minHeight: 76,
+    minHeight: 70,
     paddingVertical: 12,
     paddingHorizontal: 13,
     zIndex: 3,
@@ -6236,9 +6207,9 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   manualLogButtonIcon: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(47,93,80,0.06)",
@@ -6252,7 +6223,7 @@ const styles = StyleSheet.create({
     color: colors.accentDark,
     fontSize: 13,
     lineHeight: 19,
-    fontWeight: "500",
+    fontWeight: "600",
   },
   manualLogButtonSubtext: {
     color: "rgba(31,41,51,0.52)",
@@ -6357,47 +6328,48 @@ const styles = StyleSheet.create({
   },
   homeShortcutCard: {
     flex: 1,
-    minHeight: 84,
-    justifyContent: "space-between",
-    gap: 10,
-    backgroundColor: "rgba(255,248,237,0.52)",
+    minHeight: 74,
+    justifyContent: "center",
+    backgroundColor: "rgba(255,248,237,0.42)",
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.06)",
+    borderColor: "rgba(47,93,80,0.05)",
     borderRadius: 18,
-    paddingVertical: 10,
-    paddingHorizontal: 13,
+    paddingVertical: 13,
+    paddingHorizontal: 12,
   },
-  homeShortcutTopRow: {
+  homeShortcutDestinationRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 5,
+    backgroundColor: "transparent",
+  },
+  homeShortcutLabelGroup: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
     backgroundColor: "transparent",
   },
   homeShortcutIconCircle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "rgba(47,93,80,0.06)",
   },
-  homeShortcutCopy: {
+  homeShortcutTitle: {
     flex: 1,
     minWidth: 0,
-    backgroundColor: "transparent",
-  },
-  homeShortcutTitle: {
     color: colors.accentDark,
     fontSize: 13,
-    lineHeight: 19,
-    fontWeight: "500",
+    lineHeight: 18,
+    fontWeight: "700",
   },
-  homeShortcutSubtext: {
-    color: "rgba(31,41,51,0.52)",
-    fontSize: 10,
-    lineHeight: 15,
-    fontWeight: "400",
-    marginTop: 3,
+  homeShortcutChevron: {
+    marginLeft: 0,
   },
   bookInputLabel: {
     fontSize: 17,
@@ -6431,8 +6403,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: "transparent",
-    marginTop: 4,
-    marginBottom: -2,
+    marginTop: 10,
+    marginBottom: -4,
     zIndex: 2,
   },
   sessionsViewAllButton: {
@@ -6446,44 +6418,44 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   sessionsTitle: {
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: "600",
-    color: "rgba(31,41,51,0.58)",
+    fontSize: 12,
+    lineHeight: 17,
+    fontWeight: "500",
+    color: "rgba(31,41,51,0.46)",
   },
   sessionsCard: {
-    backgroundColor: "rgba(255,255,255,0.44)",
+    backgroundColor: "rgba(255,255,255,0.26)",
     borderRadius: 18,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
+    borderColor: "rgba(47,93,80,0.055)",
   },
   emptySessionsText: {
-    color: colors.mutedText,
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: "600",
-    padding: 20,
+    color: "rgba(107,114,128,0.68)",
+    fontSize: 13,
+    lineHeight: 20,
+    fontWeight: "500",
+    padding: 18,
   },
   sessionRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 10,
+    paddingVertical: 9,
     paddingHorizontal: 14,
     borderBottomWidth: 1,
     borderBottomColor: "rgba(47,93,80,0.06)",
-    backgroundColor: "rgba(255,255,255,0.50)",
+    backgroundColor: "rgba(255,255,255,0.30)",
   },
   lastSessionRow: {
     borderBottomWidth: 0,
   },
   sessionIconCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: colors.softAccent,
+    backgroundColor: "rgba(221,235,228,0.62)",
     marginRight: 10,
   },
   sessionRowDot: {
@@ -6495,7 +6467,7 @@ const styles = StyleSheet.create({
   sessionTextContainer: {
     flex: 1,
     marginRight: 12,
-    backgroundColor: colors.card,
+    backgroundColor: "transparent",
   },
   sessionBookTitle: {
     fontSize: 14,
@@ -6560,19 +6532,19 @@ const styles = StyleSheet.create({
   },
   diaryBackButton: {
     alignSelf: "flex-start",
-    backgroundColor: "rgba(255,248,237,0.76)",
+    backgroundColor: "rgba(255,248,237,0.58)",
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
+    borderColor: "rgba(47,93,80,0.055)",
     borderRadius: 999,
-    paddingVertical: 10,
-    paddingHorizontal: 15,
+    paddingVertical: 8,
+    paddingHorizontal: 13,
     marginBottom: 24,
   },
   diaryBackButtonText: {
-    color: colors.accentDark,
+    color: "rgba(47,93,80,0.68)",
     fontSize: 14,
     lineHeight: 20,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   menuScreen: {
     flex: 1,
@@ -6619,12 +6591,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 13,
-    backgroundColor: "rgba(255,248,237,0.70)",
+    backgroundColor: "rgba(255,248,237,0.64)",
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
+    borderColor: "rgba(47,93,80,0.065)",
     borderRadius: 22,
-    paddingVertical: 15,
-    paddingHorizontal: 15,
+    paddingVertical: 17,
+    paddingHorizontal: 17,
     ...softCardShadow,
   },
   menuNavIconCircle: {
@@ -6707,11 +6679,11 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   diaryEmptyCard: {
-    backgroundColor: "rgba(255,248,237,0.72)",
+    backgroundColor: "rgba(255,248,237,0.66)",
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
-    padding: 20,
+    borderColor: "rgba(47,93,80,0.065)",
+    padding: 22,
     marginTop: 36,
     ...softCardShadow,
   },
@@ -7068,12 +7040,12 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   finishedBookDetailMetaCard: {
-    backgroundColor: "rgba(255,248,237,0.58)",
+    backgroundColor: "rgba(255,248,237,0.62)",
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.07)",
+    borderColor: "rgba(47,93,80,0.06)",
     borderRadius: 18,
-    paddingVertical: 6,
-    paddingHorizontal: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 18,
     marginTop: 26,
   },
   finishedBookDetailMetaRow: {
@@ -7266,10 +7238,11 @@ const styles = StyleSheet.create({
     color: "#FFF8ED",
     fontSize: 25,
     lineHeight: 33,
-    fontWeight: "800",
+    fontWeight: "400",
     textAlign: "center",
-    letterSpacing: -0.3,
+    letterSpacing: 0,
     maxWidth: 310,
+    fontFamily: serifFont,
   },
   sessionSubtitle: {
     color: "rgba(255,248,237,0.66)",
@@ -7604,18 +7577,18 @@ const styles = StyleSheet.create({
   },
   closeSecondaryButton: {
     flex: 1,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.07)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.16)",
+    borderColor: "rgba(255,255,255,0.10)",
     paddingVertical: 15,
     borderRadius: 18,
     alignItems: "center",
   },
   closeSecondaryButtonText: {
-    color: "rgba(255,255,255,0.72)",
+    color: "rgba(255,255,255,0.64)",
     fontSize: 17,
     lineHeight: 23,
-    fontWeight: "700",
+    fontWeight: "600",
     letterSpacing: 0,
   },
   closeSaveButton: {
@@ -7665,10 +7638,11 @@ const styles = StyleSheet.create({
     color: "#FFF8ED",
     fontSize: 34,
     lineHeight: 41,
-    fontWeight: "900",
-    letterSpacing: -0.8,
+    fontWeight: "400",
+    letterSpacing: 0,
     textAlign: "center",
     marginBottom: 22,
+    fontFamily: serifFont,
   },
   revealSceneCard: {
     height: 260,
@@ -8032,9 +8006,9 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,248,237,0.82)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.09)",
-    paddingTop: 14,
-    paddingHorizontal: 18,
-    paddingBottom: 18,
+    paddingTop: 22,
+    paddingHorizontal: 20,
+    paddingBottom: 24,
     zIndex: 2,
     ...softCardShadow,
   },
@@ -8047,55 +8021,23 @@ const styles = StyleSheet.create({
     borderRadius: 116,
     backgroundColor: "rgba(255,248,237,0.22)",
   },
-  bookShrineTopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 7,
-    backgroundColor: "transparent",
-    marginBottom: 10,
-  },
-  bookShrineIconPill: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(47,93,80,0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
-  },
-  bookShrineStage: {
-    color: "rgba(47,93,80,0.58)",
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "500",
-    letterSpacing: 0,
-  },
-  bookShrineSubcopy: {
-    color: "rgba(31,41,51,0.62)",
-    fontSize: 15,
-    lineHeight: 21,
-    fontWeight: "500",
-    marginTop: 8,
-    textAlign: "center",
-  },
   bookShrinePanel: {
-    minHeight: 252,
+    minHeight: 248,
     flexDirection: "column",
     alignItems: "center",
-    gap: 13,
+    gap: 18,
     backgroundColor: "transparent",
   },
   bookShrineCoverWrap: {
-    width: 138,
-    height: 187,
+    width: 146,
+    height: 198,
     alignItems: "center",
     justifyContent: "center",
     position: "relative",
     shadowColor: "#C98568",
     shadowOffset: { width: 0, height: 14 },
-    shadowOpacity: 0.2,
-    shadowRadius: 26,
+    shadowOpacity: 0.18,
+    shadowRadius: 28,
     elevation: 5,
   },
   bookShrineCoverGlow: {
@@ -8108,8 +8050,8 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(247,195,107,0.16)",
   },
   bookShrineCover: {
-    width: 138,
-    height: 187,
+    width: 146,
+    height: 198,
     borderRadius: 16,
     backgroundColor: "#1E3E32",
     borderWidth: 1,
@@ -8121,8 +8063,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   bookShrineCoverImage: {
-    width: 138,
-    height: 187,
+    width: 146,
+    height: 198,
     marginHorizontal: -9,
     marginVertical: -12,
   },
@@ -8154,19 +8096,11 @@ const styles = StyleSheet.create({
   },
   bookShrineBookTitle: {
     color: colors.text,
-    fontSize: 22,
-    lineHeight: 28,
+    fontSize: 23,
+    lineHeight: 30,
     fontWeight: "400",
     letterSpacing: 0,
     fontFamily: serifFont,
-    textAlign: "center",
-  },
-  bookShrineBookMeta: {
-    color: "rgba(31,41,51,0.55)",
-    fontSize: 13,
-    lineHeight: 18,
-    fontWeight: "500",
-    marginTop: 10,
     textAlign: "center",
   },
   beaconMark: {
@@ -8408,6 +8342,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.09)",
     ...softCardShadow,
+  },
+  bookAttributionReviewCardStepTwo: {
+    marginTop: 14,
   },
   bookAttributionReviewTopRow: {
     flexDirection: "row",
@@ -8760,9 +8697,9 @@ const styles = StyleSheet.create({
   },
   bookReturnSecondaryButton: {
     flex: 1,
-    backgroundColor: "rgba(47,93,80,0.08)",
+    backgroundColor: "rgba(47,93,80,0.055)",
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
+    borderColor: "rgba(47,93,80,0.06)",
     paddingVertical: 15,
     borderRadius: 18,
     alignItems: "center",
@@ -8774,10 +8711,10 @@ const styles = StyleSheet.create({
     borderColor: "rgba(47,93,80,0.10)",
   },
   bookReturnSecondaryButtonText: {
-    color: "rgba(47,93,80,0.72)",
+    color: "rgba(47,93,80,0.64)",
     fontSize: 15,
     lineHeight: 21,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   bookReturnSaveButton: {
     flex: 1,
