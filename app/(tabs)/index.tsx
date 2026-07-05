@@ -2501,6 +2501,7 @@ export default function HomeScreen() {
 
   const openManualLog = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setLibraryReturnTarget(screen === "menu" ? "menu" : "home");
     setManualLogMinutes("30");
     setManualLogBookTitle(currentBookTitle);
     setManualLogNote("");
@@ -2528,7 +2529,7 @@ export default function HomeScreen() {
 
     try {
       await Linking.openURL(
-        `mailto:gbiv.96@gmail.com?subject=${subject}&body=${body}`,
+        `mailto:support@rousd.app?subject=${subject}&body=${body}`,
       );
     } catch (error) {
       warnInDev("Rousd could not open the email client.", error);
@@ -3030,6 +3031,7 @@ export default function HomeScreen() {
               styles.quietEndSessionButton,
               pressed && styles.buttonPressed,
             ]}
+            hitSlop={{ top: 20, bottom: 20, left: 40, right: 40 }}
             onPress={handlePress}
           >
             <ThemedText style={styles.quietEndSessionText}>
@@ -3140,6 +3142,8 @@ export default function HomeScreen() {
           contentContainerStyle={[
             styles.bookReturnContent,
             shouldUseTallAttributionLayout && styles.bookReturnContentTall,
+            isChoosingBook && shouldUseTallAttributionLayout &&
+              styles.bookReturnContentStepOneTall,
             { paddingBottom: insets.bottom + (isKeyboardVisible ? 260 : 88) },
           ]}
         >
@@ -3183,7 +3187,7 @@ export default function HomeScreen() {
           ) : null}
 
           <ThemedText style={styles.bookReturnEyebrow}>
-            {isChoosingBook ? "STEP 1 OF 2" : "STEP 2 OF 2"}
+            {isChoosingBook ? "step 1 of 2" : "step 2 of 2"}
           </ThemedText>
           <ThemedText
             style={[
@@ -3368,51 +3372,58 @@ export default function HomeScreen() {
               {shouldShowBookChoiceShortcuts && visiblePickerSessions.length > 0 && (
                 <View style={styles.recentBookPicker}>
                   <ThemedText style={styles.recentBookPickerTitle}>Recent books</ThemedText>
-                  {visiblePickerSessions.map((session) => (
-                    <Pressable
-                      key={session.id}
-                      style={({ pressed }) => [
-                        styles.recentBookChoice,
-                        pressed && styles.buttonPressed,
-                      ]}
-                      onPress={() => {
-                        Keyboard.dismiss();
-                        handleBookTitleChange(session.title);
-                        setHasUserEditedBookQuery(false);
-                        setIsBookLookupRequested(false);
-                        setBookLookupResults([]);
-                        setBookAttributionStep("reflect");
-                        setTimeout(() => {
-                          bookInputScrollRef.current?.scrollTo({
-                            y: 0,
-                            animated: true,
-                          });
-                        }, 80);
-                      }}
-                    >
-                      <View style={styles.recentBookMiniCover}>
-                        {session.coverUrl ? (
-                          <Image
-                            source={{
-                              uri: normalizeStoredCoverUrl(session.coverUrl) ?? "",
-                            }}
-                            style={styles.recentBookMiniCoverImage}
-                            resizeMode="cover"
-                          />
-                        ) : (
-                          <ThemedText style={styles.recentBookMiniCoverText}>R</ThemedText>
-                        )}
-                      </View>
-                      <View style={styles.recentBookChoiceCopy}>
-                        <ThemedText style={styles.recentBookChoiceTitle} numberOfLines={1}>
-                          {getDisplaySessionTitle(session.title)}
-                        </ThemedText>
-                        <ThemedText style={styles.recentBookChoiceMeta}>
-                          Last saved - {formatDuration(Number(session.minutes))}
-                        </ThemedText>
-                      </View>
-                    </Pressable>
-                  ))}
+                  <ScrollView
+                    nestedScrollEnabled
+                    showsVerticalScrollIndicator={false}
+                    style={styles.recentBookChoiceScroll}
+                    keyboardShouldPersistTaps="handled"
+                  >
+                    {visiblePickerSessions.map((session) => (
+                      <Pressable
+                        key={session.id}
+                        style={({ pressed }) => [
+                          styles.recentBookChoice,
+                          pressed && styles.buttonPressed,
+                        ]}
+                        onPress={() => {
+                          Keyboard.dismiss();
+                          handleBookTitleChange(session.title);
+                          setHasUserEditedBookQuery(false);
+                          setIsBookLookupRequested(false);
+                          setBookLookupResults([]);
+                          setBookAttributionStep("reflect");
+                          setTimeout(() => {
+                            bookInputScrollRef.current?.scrollTo({
+                              y: 0,
+                              animated: true,
+                            });
+                          }, 80);
+                        }}
+                      >
+                        <View style={styles.recentBookMiniCover}>
+                          {session.coverUrl ? (
+                            <Image
+                              source={{
+                                uri: normalizeStoredCoverUrl(session.coverUrl) ?? "",
+                              }}
+                              style={styles.recentBookMiniCoverImage}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <ThemedText style={styles.recentBookMiniCoverText}>R</ThemedText>
+                          )}
+                        </View>
+                        <View style={styles.recentBookChoiceCopy}>
+                          <ThemedText style={styles.recentBookChoiceTitle} numberOfLines={1}>
+                            {getDisplaySessionTitle(session.title)}
+                          </ThemedText>
+                          <ThemedText style={styles.recentBookChoiceMeta}>
+                            Last saved - {formatDuration(Number(session.minutes))}
+                          </ThemedText>
+                        </View>
+                      </Pressable>
+                    ))}
+                  </ScrollView>
                 </View>
               )}
 
@@ -3552,6 +3563,7 @@ export default function HomeScreen() {
             style={[
               styles.closeButtonRow,
               styles.bookAttributionBottomActions,
+              isChoosingBook && styles.bookAttributionBottomActionsStepOne,
               !isChoosingBook && styles.bookAttributionBottomActionsFinal,
             ]}
           >
@@ -3680,10 +3692,10 @@ export default function HomeScreen() {
               styles.manualLogBackButton,
               pressed && styles.buttonPressed,
             ]}
-            onPress={() => openHomeDestination("menu")}
+            onPress={() => openHomeDestination(libraryReturnScreen)}
           >
             <ThemedText style={styles.diaryBackButtonText}>
-              Back to menu
+              {libraryReturnLabel}
             </ThemedText>
           </Pressable>
 
@@ -3731,7 +3743,7 @@ export default function HomeScreen() {
               setManualLogMinutes(value);
               setManualLogError(null);
             }}
-            style={styles.closeBookInput}
+            style={[styles.closeBookInput, styles.manualJournalInput]}
             keyboardType="decimal-pad"
             returnKeyType="next"
             onFocus={() => setManualLogNoteFocused(false)}
@@ -3740,6 +3752,7 @@ export default function HomeScreen() {
           <View
             style={[
               styles.closeBookInput,
+              styles.manualJournalInput,
               styles.manualBookInput,
               styles.manualBookInputRow,
             ]}
@@ -3888,7 +3901,12 @@ export default function HomeScreen() {
             onChangeText={setManualLogNote}
             onFocus={() => setManualLogNoteFocused(true)}
             onBlur={() => setManualLogNoteFocused(false)}
-            style={[styles.closeBookInput, styles.manualBookInput, styles.manualNoteInput]}
+            style={[
+              styles.closeBookInput,
+              styles.manualJournalInput,
+              styles.manualBookInput,
+              styles.manualNoteInput,
+            ]}
             multiline
             textAlignVertical="top"
           />
@@ -4543,18 +4561,18 @@ export default function HomeScreen() {
                 styles.diaryBackButton,
                 pressed && styles.buttonPressed,
               ]}
-              onPress={() => setScreen("home")}
+              onPress={() => openHomeDestination(libraryReturnScreen)}
             >
               <ThemedText style={styles.diaryBackButtonText}>
-                Return home
+                {libraryReturnLabel}
               </ThemedText>
             </Pressable>
 
             <ThemedText style={styles.finishedBooksEyebrow}>
-              FINISHED BOOKS
+              YOUR COLLECTION
             </ThemedText>
             <ThemedText style={styles.finishedBooksTitle}>
-              Your quiet shelf.
+              The Shelf
             </ThemedText>
             <ThemedText style={styles.finishedBooksSubtitle}>
               {"The books you've finished, kept quietly here."}
@@ -4566,7 +4584,7 @@ export default function HomeScreen() {
                   Your shelf is waiting.
                 </ThemedText>
                 <ThemedText style={styles.diaryEmptySubtext}>
-                  Mark a book finished after reading, and it will rest here.
+                  When you complete a book via a reading session or manual entry, it will sit on your shelf.
                 </ThemedText>
               </View>
             ) : (
@@ -4654,17 +4672,6 @@ export default function HomeScreen() {
               </View>
             ) : null}
 
-            <Pressable
-              style={({ pressed }) => [
-                styles.finishedBooksReturnButton,
-                pressed && styles.buttonPressed,
-              ]}
-              onPress={() => setScreen("home")}
-            >
-              <ThemedText style={styles.finishedBooksReturnButtonText}>
-                Return home
-              </ThemedText>
-            </Pressable>
           </ScrollView>
         </ThemedView>
       );
@@ -4856,7 +4863,7 @@ export default function HomeScreen() {
                 </View>
                 <View style={styles.menuNavCopy}>
                   <ThemedText style={styles.menuNavTitle}>
-                    Finished Books
+                    The shelf
                   </ThemedText>
                   <ThemedText style={styles.menuNavSubtext}>
                     Your quiet shelf
@@ -5048,13 +5055,6 @@ export default function HomeScreen() {
                 Select what you read after the session
               </ThemedText>
             </View>
-            <View style={styles.startHeroArrowCircle}>
-              <Ionicons
-                name="arrow-forward"
-                size={19}
-                color="rgba(255,255,255,0.9)"
-              />
-            </View>
           </View>
         </Pressable>
 
@@ -5121,7 +5121,7 @@ export default function HomeScreen() {
                   />
                 </View>
                 <ThemedText style={styles.homeShortcutTitle}>
-                  Finished Books
+                  The shelf
                 </ThemedText>
               </View>
               <Ionicons
@@ -6145,14 +6145,6 @@ const styles = StyleSheet.create({
     textAlign: "center",
     flexShrink: 1,
   },
-  startHeroArrowCircle: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.13)",
-  },
   lastBookMoment: {
     backgroundColor: "rgba(255,248,237,0.58)",
     borderWidth: 1,
@@ -6196,7 +6188,7 @@ const styles = StyleSheet.create({
     borderColor: "rgba(47,93,80,0.05)",
     borderRadius: 18,
     minHeight: 70,
-    paddingVertical: 12,
+    paddingVertical: 18,
     paddingHorizontal: 13,
     zIndex: 3,
   },
@@ -6334,7 +6326,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.05)",
     borderRadius: 18,
-    paddingVertical: 13,
+    paddingVertical: 19,
     paddingHorizontal: 12,
   },
   homeShortcutDestinationRow: {
@@ -6440,7 +6432,7 @@ const styles = StyleSheet.create({
   sessionRow: {
     flexDirection: "row",
     alignItems: "center",
-    paddingVertical: 9,
+    paddingVertical: 15,
     paddingHorizontal: 14,
     borderBottomWidth: 1,
     borderBottomColor: "rgba(47,93,80,0.06)",
@@ -6707,7 +6699,7 @@ const styles = StyleSheet.create({
   },
   diaryEntryGroup: {
     backgroundColor: "transparent",
-    marginBottom: 20,
+    marginBottom: 24,
   },
   diaryDateHeader: {
     color: "rgba(47,93,80,0.62)",
@@ -6719,12 +6711,11 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   diaryEntryCard: {
-    backgroundColor: "rgba(255,248,237,0.82)",
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
-    padding: 18,
-    ...softCardShadow,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    borderWidth: 0,
+    paddingVertical: 18,
+    paddingHorizontal: 2,
   },
   diaryEntryTopRow: {
     flexDirection: "row",
@@ -6792,7 +6783,8 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(180,83,58,0.06)",
+    backgroundColor: "rgba(180,83,58,0.035)",
+    opacity: 0.7,
     marginTop: -4,
   },
   diaryReflection: {
@@ -6914,16 +6906,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.sessionBackground,
     alignItems: "center",
     justifyContent: "center",
-    padding: 6,
+    padding: 7,
     overflow: "hidden",
   },
   finishedBookCoverAlt: {
     backgroundColor: "#1E3A2C",
   },
   finishedBookCoverImage: {
-    width: 48,
-    height: 67,
-    margin: -6,
+    width: 44,
+    height: 63,
+    borderRadius: 4,
   },
   finishedBookCoverTitle: {
     color: "#F0EBE0",
@@ -6968,7 +6960,10 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     fontStyle: "italic",
-    marginTop: 8,
+    marginTop: 10,
+    paddingLeft: 10,
+    borderLeftWidth: 1,
+    borderLeftColor: "rgba(196,148,90,0.32)",
   },
   finishedBookSeparator: {
     height: 1,
@@ -7119,20 +7114,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
   },
-  finishedBooksReturnButton: {
-    height: 52,
-    backgroundColor: "#1E3A2C",
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 28,
-  },
-  finishedBooksReturnButtonText: {
-    color: "#E8E2D8",
-    fontSize: 15,
-    lineHeight: 21,
-    fontWeight: "700",
-  },
   sessionScreen: {
     flex: 1,
     backgroundColor: "#06130F",
@@ -7188,17 +7169,17 @@ const styles = StyleSheet.create({
   },
   quietEndSessionButton: {
     paddingVertical: 14,
-    paddingHorizontal: 28,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.24)",
-    backgroundColor: "rgba(255,248,237,0.08)",
+    paddingHorizontal: 8,
+    borderRadius: 0,
+    borderWidth: 0,
+    borderColor: "transparent",
+    backgroundColor: "transparent",
   },
   quietEndSessionText: {
-    color: "rgba(255,248,237,0.72)",
+    color: "rgba(255,248,237,0.66)",
     fontSize: 14,
     lineHeight: 20,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   ritualTransitionScreen: {
     flex: 1,
@@ -7347,11 +7328,11 @@ const styles = StyleSheet.create({
   },
   manualLogContent: {
     justifyContent: "flex-start",
-    paddingTop: 20,
+    paddingTop: 14,
     paddingBottom: 20,
   },
   manualLogBackButton: {
-    marginBottom: 18,
+    marginBottom: 14,
   },
   closeEyebrow: {
     color: "rgba(255,248,237,0.62)",
@@ -7391,8 +7372,17 @@ const styles = StyleSheet.create({
     color: "#FFF8ED",
     fontWeight: "600",
   },
+  manualJournalInput: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,248,237,0.22)",
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 12,
+  },
   manualBookInput: {
-    marginTop: 14,
+    marginTop: 12,
   },
   manualBookInputRow: {
     flexDirection: "row",
@@ -7414,14 +7404,14 @@ const styles = StyleSheet.create({
     borderRadius: 17,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(255,248,237,0.08)",
+    backgroundColor: "rgba(255,248,237,0.05)",
   },
   manualBookMetadataHint: {
     color: "rgba(255,248,237,0.58)",
     fontSize: 12,
     lineHeight: 17,
     fontWeight: "600",
-    marginTop: 8,
+    marginTop: 6,
   },
   manualBookLookupPanel: {
     marginTop: 12,
@@ -7511,35 +7501,37 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   manualNoteInput: {
-    minHeight: 82,
+    minHeight: 76,
     fontSize: 16,
     lineHeight: 23,
+    paddingTop: 12,
   },
   manualPresetRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
+    gap: 8,
     backgroundColor: "transparent",
-    marginTop: 20,
-    marginBottom: 14,
+    marginTop: 14,
+    marginBottom: 12,
   },
   manualPresetChip: {
-    backgroundColor: "rgba(255,248,237,0.10)",
-    borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.16)",
+    backgroundColor: "rgba(255,248,237,0.02)",
+    borderWidth: 0,
+    borderColor: "transparent",
     borderRadius: 999,
     paddingVertical: 10,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
   },
   manualPresetChipSelected: {
-    backgroundColor: "rgba(255,248,237,0.92)",
-    borderColor: "rgba(255,248,237,0.92)",
+    backgroundColor: "rgba(255,248,237,0.76)",
+    borderWidth: 1,
+    borderColor: "rgba(255,248,237,0.34)",
   },
   manualPresetChipText: {
-    color: "rgba(255,248,237,0.72)",
+    color: "rgba(255,248,237,0.66)",
     fontSize: 14,
     lineHeight: 19,
-    fontWeight: "800",
+    fontWeight: "700",
   },
   manualPresetChipTextSelected: {
     color: colors.sessionBackground,
@@ -7572,7 +7564,7 @@ const styles = StyleSheet.create({
   },
   manualLogInlineActions: {
     backgroundColor: "transparent",
-    marginTop: 18,
+    marginTop: 14,
     marginBottom: 8,
   },
   closeSecondaryButton: {
@@ -8168,6 +8160,9 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
     paddingVertical: 22,
   },
+  bookReturnContentStepOneTall: {
+    paddingVertical: 12,
+  },
   bookReturnTopSkipButton: {
     marginBottom: 18,
   },
@@ -8190,12 +8185,11 @@ const styles = StyleSheet.create({
     borderColor: "rgba(47,93,80,0.07)",
   },
   bookReturnEyebrow: {
-    color: "rgba(47,93,80,0.62)",
-    fontSize: 13,
+    color: "rgba(47,93,80,0.48)",
+    fontSize: 12,
     lineHeight: 19,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
+    fontWeight: "600",
+    letterSpacing: 0.5,
     textAlign: "center",
     marginBottom: 10,
   },
@@ -8232,7 +8226,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     textAlign: "center",
     marginTop: 9,
-    marginBottom: 26,
+    marginBottom: 20,
   },
   bookReturnMinutesCompact: {
     fontSize: 12,
@@ -8241,12 +8235,12 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   bookAttributionCard: {
-    backgroundColor: "rgba(255,255,255,0.78)",
-    borderRadius: 26,
-    padding: 16,
-    borderWidth: 1.5,
-    borderColor: "rgba(47,93,80,0.14)",
-    ...softCardShadow,
+    backgroundColor: "rgba(255,248,237,0.46)",
+    borderRadius: 22,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.055)",
   },
   bookAttributionStepHeader: {
     flexDirection: "row",
@@ -8304,11 +8298,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "#FFFDF8",
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.16)",
-    borderRadius: 18,
-    paddingHorizontal: 14,
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(47,93,80,0.18)",
+    borderRadius: 0,
+    paddingHorizontal: 0,
     paddingVertical: 13,
   },
   bookAttributionInput: {
@@ -8326,7 +8321,7 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(47,93,80,0.06)",
+    backgroundColor: "rgba(47,93,80,0.045)",
   },
   bookAttributionSelectedText: {
     color: "rgba(47,93,80,0.54)",
@@ -8545,10 +8540,10 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   recentBookPicker: {
-    marginTop: 12,
+    marginTop: 8,
     backgroundColor: "rgba(255,255,255,0.46)",
     borderRadius: 22,
-    padding: 12,
+    padding: 10,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.055)",
   },
@@ -8557,7 +8552,10 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     fontWeight: "800",
-    marginBottom: 8,
+    marginBottom: 6,
+  },
+  recentBookChoiceScroll: {
+    maxHeight: 150,
   },
   recentBookChoice: {
     flexDirection: "row",
@@ -8604,11 +8602,11 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   bookManualEntryHint: {
-    marginTop: 12,
+    marginTop: 8,
     backgroundColor: "rgba(47,93,80,0.055)",
     borderRadius: 18,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.06)",
   },
@@ -8743,6 +8741,9 @@ const styles = StyleSheet.create({
   },
   bookAttributionBottomActions: {
     marginTop: 18,
+  },
+  bookAttributionBottomActionsStepOne: {
+    marginTop: 12,
   },
   bookAttributionBottomActionsFinal: {
     flexDirection: "column-reverse",
@@ -8894,7 +8895,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     fontWeight: "500",
-    marginTop: 10,
+    marginTop: 6,
   },
   bookRevealMetaCompact: {
     fontSize: 13,
@@ -8934,7 +8935,7 @@ const styles = StyleSheet.create({
   },
   sessionReflectionInputCompact: {
     height: 58,
-    paddingVertical: 9,
+    paddingVertical: 7,
   },
   completedBookScreen: {
     flex: 1,
