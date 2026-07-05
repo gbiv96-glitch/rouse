@@ -1,9 +1,13 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
+import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
+import { useEffect } from 'react';
 import 'react-native-reanimated';
 
 import { RousdPalette } from '@/constants/theme';
+import { typographyFontsToLoad } from '@/constants/typography';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import * as Sentry from '@sentry/react-native';
 
@@ -21,6 +25,10 @@ Sentry.init({
 export const unstable_settings = {
   anchor: '(tabs)',
 };
+
+SplashScreen.preventAutoHideAsync().catch(() => {
+  // The splash screen may already be hidden in development reloads.
+});
 
 const rousdLightTheme = {
   ...DefaultTheme,
@@ -50,6 +58,20 @@ const rousdDarkTheme = {
 
 export default Sentry.wrap(function RootLayout() {
   const colorScheme = useColorScheme();
+  const [fontsLoaded, fontError] = useFonts(typographyFontsToLoad);
+  const isTypographyReady = fontsLoaded || Boolean(fontError);
+
+  useEffect(() => {
+    if (!isTypographyReady) return;
+
+    SplashScreen.hideAsync().catch(() => {
+      // A hidden splash should not block app rendering.
+    });
+  }, [isTypographyReady]);
+
+  if (!isTypographyReady) {
+    return null;
+  }
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? rousdDarkTheme : rousdLightTheme}>
