@@ -1604,6 +1604,7 @@ export default function HomeScreen() {
     const loadSavedData = async () => {
       let nextScreen: Screen = "home";
       let loadedRecentSessions: ReadingSession[] = [];
+      let loadedCompletedBooks: CompletedBookReview[] = [];
 
       try {
         const savedSeconds = await AsyncStorage.getItem(SECONDS_KEY);
@@ -1691,6 +1692,7 @@ export default function HomeScreen() {
                 new Date(first.completedAt).getTime(),
             ),
           );
+          loadedCompletedBooks = migratedCompletedBooks;
 
           if (shouldPersistMigratedCompletedBooks) {
             await AsyncStorage.setItem(
@@ -1700,7 +1702,22 @@ export default function HomeScreen() {
           }
         }
 
-        if (savedHasSeenWelcome !== "true" && savedActiveSessionStartTime === null) {
+        const hasExistingReadingData =
+          loadedRecentSessions.length > 0 ||
+          loadedCompletedBooks.length > 0 ||
+          savedLifetimeTotalSeconds > 0 ||
+          getFiniteStoredNumber(savedTotalCompletedSessions, 0) > 0 ||
+          Boolean(
+            savedCurrentBook &&
+              !isUnattachedSessionTitle(savedCurrentBook) &&
+              savedCurrentBook.trim(),
+          );
+
+        if (
+          savedHasSeenWelcome !== "true" &&
+          savedActiveSessionStartTime === null &&
+          !hasExistingReadingData
+        ) {
           nextScreen = "welcome";
         }
 
@@ -1954,7 +1971,7 @@ export default function HomeScreen() {
         selectedBookMetadata: null,
       };
 
-      const finishActiveSessionExit = async () => {
+      try {
         await AsyncStorage.multiSet([
           [SECONDS_KEY, String(updatedTodaySeconds)],
           [LIFETIME_SECONDS_KEY, String(updatedLifetimeSeconds)],
@@ -1965,7 +1982,14 @@ export default function HomeScreen() {
           ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
           ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
         ]);
+      } catch (error) {
+        warnInDev("Rousd failed to preserve pending timed session.", error);
+        isEndingSessionRef.current = false;
+        setIsExitingReading(false);
+        return;
+      }
 
+      const finishActiveSessionExit = () => {
         setSeconds(updatedTodaySeconds);
         setLifetimeSeconds(updatedLifetimeSeconds);
         setPendingPostSessionId(sessionId);
@@ -1994,7 +2018,7 @@ export default function HomeScreen() {
           return;
         }
 
-        void finishActiveSessionExit();
+        finishActiveSessionExit();
       });
     }
   };
@@ -2293,14 +2317,16 @@ export default function HomeScreen() {
     setBookInputError(null);
 
     try {
-      const validBookTitle = getValidBookTitle(bookTitle);
+      const selectedBookTitle = getValidBookTitle(selectedBookMetadata?.title);
+      const validBookTitle = getValidBookTitle(bookTitle) ?? selectedBookTitle;
       const titleToSave = validBookTitle || UNATTACHED_SESSION_TITLE;
       const shouldCompleteBook = showBookCompletedInput && Boolean(validBookTitle);
       const reflectionToSave =
         options.reflectionOverride ?? completedBookReview;
       const selectedMetadata =
         validBookTitle &&
-        selectedBookMetadata?.title.trim() === validBookTitle
+        selectedBookMetadata &&
+        selectedBookTitle === validBookTitle
           ? selectedBookMetadata
           : validBookTitle
             ? findKnownBookMetadataByTitle(validBookTitle)
@@ -2913,10 +2939,17 @@ export default function HomeScreen() {
           <ThemedText style={styles.welcomeEyebrow}>Rousd</ThemedText>
           <View style={styles.welcomeTitleBlock}>
             <ThemedText style={styles.welcomeTitle}>
-              A quiet place to return.
+              A quiet sanctuary for your reading life.
             </ThemedText>
             <ThemedText style={styles.welcomeBody}>
-              A gentle companion for reading.
+              Here, reading is not measured or optimized.
+            </ThemedText>
+            <ThemedText style={styles.welcomeBody}>
+              Your timer stays hidden while you read. When you finish, you can
+              save the time to a book and leave a reflection if you wish.
+            </ThemedText>
+            <ThemedText style={styles.welcomeBody}>
+              Your reading history stays private, stored on this device.
             </ThemedText>
           </View>
 
@@ -2927,7 +2960,7 @@ export default function HomeScreen() {
             ]}
             onPress={dismissWelcomeScreen}
           >
-            <ThemedText style={styles.welcomeButtonText}>Begin quietly</ThemedText>
+            <ThemedText style={styles.welcomeButtonText}>Begin</ThemedText>
           </Pressable>
         </View>
         </ScrollView>
@@ -5140,10 +5173,10 @@ export default function HomeScreen() {
           {shouldShowHomeBlankLeaf ? (
             <View style={styles.homeBlankLeaf}>
               <ThemedText style={styles.homeBlankLeafText}>
-                Begin with a page.
+                Your shelf is clear and waiting.
               </ThemedText>
               <ThemedText style={styles.homeBlankLeafSubtext}>
-                {"You can name the book after you read.\nNo setup needed."}
+                When you are ready, settle in and begin reading.
               </ThemedText>
             </View>
           ) : (
@@ -5572,7 +5605,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "space-between",
     backgroundColor: "transparent",
-    paddingVertical: 92,
+    paddingVertical: 72,
   },
   welcomeGlowTop: {
     position: "absolute",
@@ -5695,6 +5728,8 @@ const styles = StyleSheet.create({
   welcomeTitleBlock: {
     alignItems: "center",
     backgroundColor: "transparent",
+    gap: 10,
+    marginVertical: 24,
   },
   welcomeTitle: {
     ...typography.role.helper,
@@ -5703,7 +5738,7 @@ const styles = StyleSheet.create({
     lineHeight: 25,
     textAlign: "center",
     marginTop: 0,
-    maxWidth: 260,
+    maxWidth: 286,
   },
   welcomeBody: {
     ...typography.role.metadata,
@@ -5711,8 +5746,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 19,
     textAlign: "center",
-    marginTop: 8,
-    maxWidth: 232,
+    maxWidth: 292,
   },
   welcomeStepsCard: {
     backgroundColor: "rgba(247,243,234,0.78)",
