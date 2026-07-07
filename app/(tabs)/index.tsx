@@ -156,7 +156,7 @@ const sanctuaryStages: SanctuaryStage[] = [
   {
     stage: 0,
     title: "Your place is here.",
-    subtitle: "Start reading, then save the book you read.",
+    subtitle: "Begin with a page, then name the book after.",
     shortLabel: "Reading Place",
   },
   {
@@ -946,8 +946,13 @@ export default function HomeScreen() {
   const [manualLogNoteFocused, setManualLogNoteFocused] = useState(false);
   const [completedBookReviewFocused, setCompletedBookReviewFocused] =
     useState(false);
+  const [isEnteringReading, setIsEnteringReading] = useState(false);
+  const [isExitingReading, setIsExitingReading] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isStartingSessionRef = useRef(false);
+  const isEndingSessionRef = useRef(false);
+  const homeEntryOpacity = useRef(new Animated.Value(1)).current;
   const ritualOpacity = useRef(new Animated.Value(0)).current;
   const ritualScale = useRef(new Animated.Value(0.98)).current;
   const ritualLineOpacity = useRef(new Animated.Value(0)).current;
@@ -958,6 +963,7 @@ export default function HomeScreen() {
   const closeTransitionOpacity = useRef(new Animated.Value(0)).current;
   const closeTransitionScale = useRef(new Animated.Value(0.97)).current;
   const closeTransitionTranslateY = useRef(new Animated.Value(12)).current;
+  const bookInputOpacity = useRef(new Animated.Value(1)).current;
   const revealOpacity = useRef(new Animated.Value(0)).current;
   const revealScale = useRef(new Animated.Value(0.96)).current;
   const revealTranslateY = useRef(new Animated.Value(18)).current;
@@ -1410,6 +1416,14 @@ export default function HomeScreen() {
   ]);
 
   useEffect(() => {
+    if (screen !== "home") return;
+
+    homeEntryOpacity.setValue(1);
+    isStartingSessionRef.current = false;
+    setIsEnteringReading(false);
+  }, [homeEntryOpacity, screen]);
+
+  useEffect(() => {
     if (screen !== "active") return;
 
     activeSessionOpacity.setValue(0);
@@ -1463,7 +1477,7 @@ export default function HomeScreen() {
       Animated.delay(1550),
       Animated.timing(closeTransitionOpacity, {
         toValue: 0,
-        duration: 420,
+        duration: 360,
         useNativeDriver: true,
       }),
     ]);
@@ -1484,6 +1498,24 @@ export default function HomeScreen() {
     closeTransitionTranslateY,
     screen,
   ]);
+
+  useEffect(() => {
+    if (screen !== "bookInput") return;
+
+    bookInputOpacity.setValue(0);
+
+    const animation = Animated.timing(bookInputOpacity, {
+      toValue: 1,
+      duration: 360,
+      useNativeDriver: true,
+    });
+
+    animation.start();
+
+    return () => {
+      animation.stop();
+    };
+  }, [bookInputOpacity, screen]);
 
   useEffect(() => {
     if (screen !== "reveal" || !sanctuaryReveal) return;
@@ -1855,9 +1887,15 @@ export default function HomeScreen() {
   };
 
   const handlePress = async () => {
+    if (!isReading && isStartingSessionRef.current) return;
+    if (isReading && isEndingSessionRef.current) return;
+
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
     if (!isReading) {
+      isStartingSessionRef.current = true;
+      setIsEnteringReading(true);
+
       await persistTodayDateIfNeeded();
 
       const now = Date.now();
@@ -1876,7 +1914,18 @@ export default function HomeScreen() {
       setShowBookCompletedInput(false);
       setCompletedBookReview("");
       setIsReading(true);
-      setScreen("ritual");
+
+      homeEntryOpacity.stopAnimation();
+      homeEntryOpacity.setValue(1);
+      Animated.timing(homeEntryOpacity, {
+        toValue: 0,
+        duration: 360,
+        useNativeDriver: true,
+      }).start(() => {
+        isStartingSessionRef.current = false;
+        setIsEnteringReading(false);
+        setScreen("ritual");
+      });
 
       await AsyncStorage.multiSet([
         [ACTIVE_SESSION_START_KEY, String(now)],
@@ -1884,6 +1933,9 @@ export default function HomeScreen() {
         [ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY, String(lifetimeSeconds)],
       ]);
     } else if (activeSessionStartTime) {
+      isEndingSessionRef.current = true;
+      setIsExitingReading(true);
+
       const sessionSeconds = calculateElapsedSeconds(activeSessionStartTime);
       const updatedTodaySeconds = sessionStartSeconds + sessionSeconds;
       const updatedLifetimeSeconds =
@@ -1902,29 +1954,48 @@ export default function HomeScreen() {
         selectedBookMetadata: null,
       };
 
-      await AsyncStorage.multiSet([
-        [SECONDS_KEY, String(updatedTodaySeconds)],
-        [LIFETIME_SECONDS_KEY, String(updatedLifetimeSeconds)],
-        [PENDING_POST_SESSION_DRAFT_KEY, JSON.stringify(pendingDraft)],
-      ]);
-      await AsyncStorage.multiRemove([
-        ACTIVE_SESSION_START_KEY,
-        ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
-        ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
-      ]);
+      const finishActiveSessionExit = async () => {
+        await AsyncStorage.multiSet([
+          [SECONDS_KEY, String(updatedTodaySeconds)],
+          [LIFETIME_SECONDS_KEY, String(updatedLifetimeSeconds)],
+          [PENDING_POST_SESSION_DRAFT_KEY, JSON.stringify(pendingDraft)],
+        ]);
+        await AsyncStorage.multiRemove([
+          ACTIVE_SESSION_START_KEY,
+          ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
+          ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
+        ]);
 
-      setSeconds(updatedTodaySeconds);
-      setLifetimeSeconds(updatedLifetimeSeconds);
-      setPendingPostSessionId(sessionId);
-      setPendingSessionSeconds(sessionSeconds);
-      setBookTitle(currentBookTitle);
-      setSelectedBookMetadata(null);
-      setHasUserEditedBookQuery(false);
-      setIsBookLookupRequested(false);
-      setSessionMessage(`+${sessionDuration} added`);
-      setIsReading(false);
-      setActiveSessionStartTime(null);
-      setScreen("closeTransition");
+        setSeconds(updatedTodaySeconds);
+        setLifetimeSeconds(updatedLifetimeSeconds);
+        setPendingPostSessionId(sessionId);
+        setPendingSessionSeconds(sessionSeconds);
+        setBookTitle(currentBookTitle);
+        setSelectedBookMetadata(null);
+        setHasUserEditedBookQuery(false);
+        setIsBookLookupRequested(false);
+        setSessionMessage(`+${sessionDuration} added`);
+        setIsReading(false);
+        setActiveSessionStartTime(null);
+        isEndingSessionRef.current = false;
+        setIsExitingReading(false);
+        setScreen("closeTransition");
+      };
+
+      activeSessionOpacity.stopAnimation();
+      Animated.timing(activeSessionOpacity, {
+        toValue: 0,
+        duration: 360,
+        useNativeDriver: true,
+      }).start(({ finished }) => {
+        if (!finished) {
+          isEndingSessionRef.current = false;
+          setIsExitingReading(false);
+          return;
+        }
+
+        void finishActiveSessionExit();
+      });
     }
   };
 
@@ -2583,7 +2654,7 @@ export default function HomeScreen() {
     const minutesNumber = Number(normalizedMinutes);
 
     if (!Number.isFinite(minutesNumber) || minutesNumber <= 0) {
-      setManualLogError("Enter a reading time greater than 0 minutes.");
+      setManualLogError("Add a reading time greater than 0 minutes.");
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       return;
     }
@@ -2839,39 +2910,14 @@ export default function HomeScreen() {
           contentContainerStyle={styles.welcomeContent}
         >
         <View style={styles.welcomeCard}>
-          <View style={styles.welcomeSanctuaryPreview}>
-            <View style={styles.welcomeLampGlow} />
-            <View style={styles.welcomeReadingSurface} />
-            <View style={styles.welcomeMug} />
-            <View style={styles.welcomeMugHandle} />
-            <View style={styles.welcomeStillLifeBook}>
-              <View style={styles.welcomeBookCover} />
-              <View style={styles.welcomeBookSpine} />
-              <View style={styles.welcomeBookPageEdge} />
-            </View>
-          </View>
-
-          <ThemedText style={styles.welcomeEyebrow}>WELCOME TO ROUSD</ThemedText>
-          <ThemedText style={styles.welcomeTitle}>
-            Keep a light on for your reading life.
-          </ThemedText>
-          <ThemedText style={styles.welcomeBody}>
-            {"Start a quiet reading moment, put your phone down, then return when you're done. Rousd keeps the time and helps you save the book, note, or moment you want to remember."}
-          </ThemedText>
-
-          <View style={styles.welcomeStepsCard}>
-            <View style={styles.welcomeStepRow}>
-              <ThemedText style={styles.welcomeStepNumber}>1</ThemedText>
-              <ThemedText style={styles.welcomeStepText}>Press the Start reading button</ThemedText>
-            </View>
-            <View style={styles.welcomeStepRow}>
-              <ThemedText style={styles.welcomeStepNumber}>2</ThemedText>
-              <ThemedText style={styles.welcomeStepText}>Read your book or e-reader</ThemedText>
-            </View>
-            <View style={styles.welcomeStepRow}>
-              <ThemedText style={styles.welcomeStepNumber}>3</ThemedText>
-              <ThemedText style={styles.welcomeStepText}>Return and save what you read</ThemedText>
-            </View>
+          <ThemedText style={styles.welcomeEyebrow}>Rousd</ThemedText>
+          <View style={styles.welcomeTitleBlock}>
+            <ThemedText style={styles.welcomeTitle}>
+              A quiet place to return.
+            </ThemedText>
+            <ThemedText style={styles.welcomeBody}>
+              A gentle companion for reading.
+            </ThemedText>
           </View>
 
           <Pressable
@@ -2881,7 +2927,7 @@ export default function HomeScreen() {
             ]}
             onPress={dismissWelcomeScreen}
           >
-            <ThemedText style={styles.welcomeButtonText}>Enter your reading place</ThemedText>
+            <ThemedText style={styles.welcomeButtonText}>Begin quietly</ThemedText>
           </Pressable>
         </View>
         </ScrollView>
@@ -3045,8 +3091,10 @@ export default function HomeScreen() {
           <Pressable
             style={({ pressed }) => [
               styles.quietEndSessionButton,
+              isExitingReading && { opacity: 0.72 },
               pressed && styles.buttonPressed,
             ]}
+            disabled={isExitingReading}
             hitSlop={{ top: 20, bottom: 20, left: 40, right: 40 }}
             onPress={handlePress}
           >
@@ -3078,7 +3126,7 @@ export default function HomeScreen() {
         ? "Selected from Google Books"
         : knownBookMetadata
           ? "Saved book found"
-          : "Manual title";
+          : "Your title";
       const hasAttributionBook = Boolean(
         canCompleteBook || selectedBookMetadata || knownBookMetadata,
       );
@@ -3102,6 +3150,8 @@ export default function HomeScreen() {
         isKeyboardVisible ||
         shouldShowBookLookup ||
         visiblePickerSessions.length > 0;
+      const attributionKeyboardBottomPadding =
+        insets.bottom + (isKeyboardVisible ? 320 : 88);
       const shouldShowBookChoiceShortcuts =
         isChoosingBook && !isSearchingForBook;
       const continueToAttributionReflection = () => {
@@ -3118,7 +3168,7 @@ export default function HomeScreen() {
         ? "Continue"
         : isSavingAttributionBook
           ? "Saving..."
-          : "Save to this book";
+          : "Keep this moment";
       const handleAttributionPrimaryPress = () => {
         if (isChoosingBook) {
           continueToAttributionReflection();
@@ -3144,6 +3194,7 @@ export default function HomeScreen() {
         <View pointerEvents="none" style={styles.bookReturnGlowTop} />
         <View pointerEvents="none" style={styles.bookReturnGlowBottom} />
 
+        <Animated.View style={[styles.bookInputFadeShell, { opacity: bookInputOpacity }]}>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={{ flex: 1 }}
@@ -3153,14 +3204,14 @@ export default function HomeScreen() {
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
           automaticallyAdjustKeyboardInsets
-          contentInset={{ bottom: isKeyboardVisible ? 180 : 0 }}
-          scrollIndicatorInsets={{ bottom: isKeyboardVisible ? 180 : 0 }}
+          contentInset={{ bottom: isKeyboardVisible ? 220 : 0 }}
+          scrollIndicatorInsets={{ bottom: isKeyboardVisible ? 220 : 0 }}
           contentContainerStyle={[
             styles.bookReturnContent,
             shouldUseTallAttributionLayout && styles.bookReturnContentTall,
             isChoosingBook && shouldUseTallAttributionLayout &&
               styles.bookReturnContentStepOneTall,
-            { paddingBottom: insets.bottom + (isKeyboardVisible ? 260 : 88) },
+            { paddingBottom: attributionKeyboardBottomPadding },
           ]}
         >
           {!isChoosingBook ? (
@@ -3203,7 +3254,7 @@ export default function HomeScreen() {
           ) : null}
 
           <ThemedText style={styles.bookReturnEyebrow}>
-            {isChoosingBook ? "step 1 of 2" : "step 2 of 2"}
+            {isChoosingBook ? "Book" : "A quiet note"}
           </ThemedText>
           <ThemedText
             style={[
@@ -3404,7 +3455,7 @@ export default function HomeScreen() {
                     >
                       {bookLookupError
                         ? "Couldn't check matches right now. You can still save this title."
-                        : "No matches yet. You can still save this title."}
+                      : "No matches yet. You can still keep this title."}
                     </ThemedText>
                   ) : null}
 
@@ -3526,7 +3577,7 @@ export default function HomeScreen() {
                       style={styles.bookAttributionReviewTitle}
                       numberOfLines={2}
                     >
-                      {getValidBookTitle(bookTitle) || "Untitled book"}
+                    {getValidBookTitle(bookTitle) || "An unnamed book"}
                     </ThemedText>
                     {attributionPreviewMetadata?.author ? (
                       <ThemedText
@@ -3616,6 +3667,8 @@ export default function HomeScreen() {
               styles.closeButtonRow,
               styles.bookAttributionBottomActions,
               isChoosingBook && styles.bookAttributionBottomActionsStepOne,
+              isChoosingBook && isKeyboardVisible &&
+                styles.bookAttributionBottomActionsKeyboard,
               !isChoosingBook && styles.bookAttributionBottomActionsFinal,
             ]}
           >
@@ -3657,6 +3710,7 @@ export default function HomeScreen() {
           </View>
         </ScrollView>
         </KeyboardAvoidingView>
+        </Animated.View>
       </ThemedView>
     );
     }
@@ -3675,10 +3729,29 @@ export default function HomeScreen() {
       const shouldInlineManualLogActions = isKeyboardVisible;
       const isSavingManualLog = savingAction === "manualLog";
       const manualLogActions = (
-        <View style={styles.closeButtonRow}>
+        <View style={styles.manualLogActionStack}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.closeSaveButton,
+              styles.manualLogPrimaryAction,
+              isSavingManualLog && { opacity: 0.72 },
+              pressed && styles.buttonPressed,
+            ]}
+            disabled={isSavingManualLog}
+            onPress={saveManualReadingLog}
+          >
+            <ThemedText
+              style={styles.closeSaveButtonText}
+              numberOfLines={1}
+            >
+              {isSavingManualLog ? "Saving..." : "Save this moment"}
+            </ThemedText>
+          </Pressable>
+
           <Pressable
             style={({ pressed }) => [
               styles.closeSecondaryButton,
+              styles.manualLogSecondaryAction,
               isSavingManualLog && { opacity: 0.62 },
               pressed && styles.buttonPressed,
             ]}
@@ -3686,21 +3759,7 @@ export default function HomeScreen() {
             onPress={cancelManualLog}
           >
             <ThemedText style={styles.closeSecondaryButtonText}>
-              Cancel
-            </ThemedText>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.closeSaveButton,
-              isSavingManualLog && { opacity: 0.72 },
-              pressed && styles.buttonPressed,
-            ]}
-            disabled={isSavingManualLog}
-            onPress={saveManualReadingLog}
-          >
-            <ThemedText style={styles.closeSaveButtonText}>
-              {isSavingManualLog ? "Saving..." : "Save reading"}
+              Not now
             </ThemedText>
           </Pressable>
         </View>
@@ -3734,7 +3793,7 @@ export default function HomeScreen() {
             styles.manualLogContent,
             {
               paddingBottom:
-                insets.bottom + (shouldInlineManualLogActions ? 120 : 132),
+                insets.bottom + (shouldInlineManualLogActions ? 156 : 152),
             },
           ]}
         >
@@ -3754,7 +3813,7 @@ export default function HomeScreen() {
           <ThemedText style={styles.closeEyebrow}>Reading moment</ThemedText>
           <ThemedText style={styles.closeTitle}>What did the time hold?</ThemedText>
           <ThemedText style={styles.closeMinutes}>
-            For reading you did away from the timer.
+            For reading outside the timer.
           </ThemedText>
 
           <View style={styles.manualPresetRow}>
@@ -3788,7 +3847,7 @@ export default function HomeScreen() {
           </View>
 
           <TextInput
-            placeholder="Minutes read"
+            placeholder="Minutes"
             placeholderTextColor="rgba(255,255,255,0.45)"
             value={manualLogMinutes}
             onChangeText={(value) => {
@@ -3811,7 +3870,7 @@ export default function HomeScreen() {
           >
             <TextInput
               ref={manualBookTitleInputRef}
-              placeholder="Book title (optional)"
+              placeholder="Book name (optional)"
               placeholderTextColor="rgba(255,255,255,0.45)"
               value={manualLogBookTitle}
               onChangeText={handleManualBookTitleChange}
@@ -3865,7 +3924,7 @@ export default function HomeScreen() {
             <View style={styles.manualBookLookupPanel}>
               <View style={styles.bookLookupHeaderRow}>
                 <ThemedText style={styles.manualBookLookupTitle}>
-                  Book matches
+                  Possible books
                 </ThemedText>
                 {isManualBookLookupLoading ? (
                   <ThemedText style={styles.manualBookLookupLoading}>
@@ -3940,14 +3999,14 @@ export default function HomeScreen() {
                 <ThemedText style={styles.manualBookLookupEmptyText}>
                   {manualBookLookupError
                     ? "Couldn't check matches right now. You can still save this title."
-                    : "No matches yet. You can still save this title."}
+                    : "No matches yet. You can still keep this title."}
                 </ThemedText>
               ) : null}
             </View>
           ) : null}
 
           <TextInput
-            placeholder="Optional note or reflection"
+            placeholder="A note, if you'd like"
             placeholderTextColor="rgba(255,255,255,0.45)"
             value={manualLogNote}
             onChangeText={setManualLogNote}
@@ -4022,8 +4081,7 @@ export default function HomeScreen() {
       const completedBookBottomPadding = isKeyboardVisible
         ? Math.max(insets.bottom + 140, 180)
         : insets.bottom + 32;
-      const shouldInlineCompletedBookActions =
-        isKeyboardVisible || completedBookReviewFocused;
+      const shouldInlineCompletedBookActions = isKeyboardVisible;
       const isSavingCompletedBookSave = savingAction === "completedBookSave";
       const isSavingCompletedBookSkip = savingAction === "completedBookSkip";
       const isSavingCompletedBook =
@@ -4052,7 +4110,7 @@ export default function HomeScreen() {
             <ThemedText style={styles.completedBookReturnButtonText}>
               {isSavingCompletedBookSave
                 ? "Saving..."
-                : "Save & remember this book"}
+                : "Save this book"}
             </ThemedText>
           </Pressable>
 
@@ -4167,10 +4225,20 @@ export default function HomeScreen() {
                 styles.completedBookMetaRow,
               ]}
             >
-              <ThemedText style={styles.finishedBookDetailMetaLabel}>
+              <ThemedText
+                style={[
+                  styles.finishedBookDetailMetaLabel,
+                  styles.completedBookMetaLabel,
+                ]}
+              >
                 Reading time
               </ThemedText>
-              <ThemedText style={styles.finishedBookDetailMetaValue}>
+              <ThemedText
+                style={[
+                  styles.finishedBookDetailMetaValue,
+                  styles.completedBookMetaValue,
+                ]}
+              >
                 {formatDuration(Number(completedBookMoment.totalBookMinutes))}
               </ThemedText>
             </View>
@@ -4181,10 +4249,20 @@ export default function HomeScreen() {
                 styles.completedBookMetaRow,
               ]}
             >
-              <ThemedText style={styles.finishedBookDetailMetaLabel}>
+              <ThemedText
+                style={[
+                  styles.finishedBookDetailMetaLabel,
+                  styles.completedBookMetaLabel,
+                ]}
+              >
                 Kept from
               </ThemedText>
-              <ThemedText style={styles.finishedBookDetailMetaValue}>
+              <ThemedText
+                style={[
+                  styles.finishedBookDetailMetaValue,
+                  styles.completedBookMetaValue,
+                ]}
+              >
                 {completedBookMoment.sessionCount} {completedBookSessionLabel}
               </ThemedText>
             </View>
@@ -4195,10 +4273,20 @@ export default function HomeScreen() {
                 styles.completedBookMetaRow,
               ]}
             >
-              <ThemedText style={styles.finishedBookDetailMetaLabel}>
+              <ThemedText
+                style={[
+                  styles.finishedBookDetailMetaLabel,
+                  styles.completedBookMetaLabel,
+                ]}
+              >
                 Time with this book
               </ThemedText>
-              <ThemedText style={styles.finishedBookDetailMetaValue}>
+              <ThemedText
+                style={[
+                  styles.finishedBookDetailMetaValue,
+                  styles.completedBookMetaValue,
+                ]}
+              >
                 {daysCount === 1 ? "Today" : `${daysCount} days`}
               </ThemedText>
             </View>
@@ -4497,10 +4585,10 @@ export default function HomeScreen() {
             {diarySessions.length === 0 ? (
               <View style={styles.diaryEmptyCard}>
                 <ThemedText style={styles.diaryEmptyText}>
-                  No reading moments here yet.
+                  Your diary is quiet for now.
                 </ThemedText>
                 <ThemedText style={styles.diaryEmptySubtext}>
-                  {"Start reading, then come back here to see what you've kept."}
+                  {"When you keep a reading moment, it will appear here."}
                 </ThemedText>
               </View>
             ) : (
@@ -4633,10 +4721,13 @@ export default function HomeScreen() {
             {completedBooks.length === 0 ? (
               <View style={styles.finishedBooksEmptyState}>
                 <ThemedText style={styles.finishedBooksEmptyText}>
-                  No books resting here yet.
+                  Your shelf is waiting.
                 </ThemedText>
                 <ThemedText style={styles.finishedBooksEmptySubtext}>
-                  Finished books will gather here over time.
+                  Books you finish will rest here.
+                </ThemedText>
+                <ThemedText style={styles.finishedBooksEmptyHelper}>
+                  No rush to fill it.
                 </ThemedText>
               </View>
             ) : (
@@ -4760,6 +4851,7 @@ export default function HomeScreen() {
             <Pressable
               style={({ pressed }) => [
                 styles.diaryBackButton,
+                styles.finishedBookDetailBackButton,
                 pressed && styles.buttonPressed,
               ]}
               onPress={() => setScreen("finishedBooks")}
@@ -4949,10 +5041,10 @@ export default function HomeScreen() {
                 </View>
                 <View style={styles.menuNavCopy}>
                   <ThemedText style={styles.menuNavTitle}>
-                    Add a reading moment
+                    Save a reading moment
                   </ThemedText>
                   <ThemedText style={styles.menuNavSubtext}>
-                    For reading you did away from the timer.
+                    For reading outside the timer.
                   </ThemedText>
                 </View>
                 <Ionicons
@@ -4991,8 +5083,8 @@ export default function HomeScreen() {
       );
     case "home":
       return (
-    <ScrollView
-      style={styles.screen}
+    <Animated.ScrollView
+      style={[styles.screen, { opacity: homeEntryOpacity }]}
       contentContainerStyle={[
         styles.scrollContent,
         { paddingBottom: Math.max(insets.bottom + 28, 44) },
@@ -5048,7 +5140,10 @@ export default function HomeScreen() {
           {shouldShowHomeBlankLeaf ? (
             <View style={styles.homeBlankLeaf}>
               <ThemedText style={styles.homeBlankLeafText}>
-                {"There is no rush to finish.\nWhen you're ready, read a little. You can name the book afterward."}
+                Begin with a page.
+              </ThemedText>
+              <ThemedText style={styles.homeBlankLeafSubtext}>
+                {"You can name the book after you read.\nNo setup needed."}
               </ThemedText>
             </View>
           ) : (
@@ -5094,9 +5189,11 @@ export default function HomeScreen() {
         <Pressable
           style={({ pressed }) => [
             styles.startHero,
+            isEnteringReading && { opacity: 0.82 },
             pressed && styles.buttonPressed,
           ]}
           onPress={handlePress}
+          disabled={isEnteringReading}
         >
           <View style={styles.startHeroContent}>
             <Ionicons
@@ -5233,7 +5330,7 @@ export default function HomeScreen() {
         <ThemedView style={styles.sessionsCard}>
           {recentSessions.length === 0 ? (
             <ThemedText style={styles.emptySessionsText}>
-              Your reading moments will gather here.
+              A few quiet moments will gather here after you read.
             </ThemedText>
           ) : (
             visibleSessions.slice(0, 1).map((session, index) => {
@@ -5288,10 +5385,10 @@ export default function HomeScreen() {
             </View>
             <View style={styles.manualLogButtonCopy}>
               <ThemedText style={styles.manualLogButtonText}>
-                Add a reading moment
+                Save a reading moment
               </ThemedText>
               <ThemedText style={styles.manualLogButtonSubtext}>
-                For reading you did away from the timer.
+                For reading outside the timer.
               </ThemedText>
             </View>
             <Ionicons
@@ -5303,18 +5400,10 @@ export default function HomeScreen() {
         </Pressable>
 
       </ThemedView>
-    </ScrollView>
+    </Animated.ScrollView>
       );
   }
 }
-
-const cardShadow = {
-  shadowColor: "#000",
-  shadowOffset: { width: 0, height: 4 },
-  shadowOpacity: 0.07,
-  shadowRadius: 14,
-  elevation: 4,
-};
 
 const softCardShadow = {
   shadowColor: "#000",
@@ -5473,7 +5562,7 @@ const styles = StyleSheet.create({
   welcomeScreen: {
     flex: 1,
     backgroundColor: colors.background,
-    paddingHorizontal: 22,
+    paddingHorizontal: 30,
     paddingTop: 72,
     paddingBottom: 42,
     justifyContent: "flex-start",
@@ -5481,8 +5570,9 @@ const styles = StyleSheet.create({
   },
   welcomeContent: {
     flexGrow: 1,
-    justifyContent: "center",
+    justifyContent: "space-between",
     backgroundColor: "transparent",
+    paddingVertical: 92,
   },
   welcomeGlowTop: {
     position: "absolute",
@@ -5503,12 +5593,13 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(224,204,166,0.18)",
   },
   welcomeCard: {
-    backgroundColor: "rgba(255,255,255,0.72)",
-    borderRadius: 30,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
-    ...cardShadow,
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "transparent",
+    paddingVertical: 10,
+    borderWidth: 0,
+    borderColor: "transparent",
   },
   welcomeSanctuaryPreview: {
     height: 126,
@@ -5594,28 +5685,34 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(247,243,234,0.54)",
   },
   welcomeEyebrow: {
-    color: "rgba(47,93,80,0.72)",
-    fontSize: 11,
-    lineHeight: 15,
-    fontWeight: "900",
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-    marginBottom: 8,
+    ...typography.role.wordmark,
+    color: "#173826",
+    fontSize: 56,
+    lineHeight: 62,
+    textAlign: "center",
+    marginTop: 18,
+  },
+  welcomeTitleBlock: {
+    alignItems: "center",
+    backgroundColor: "transparent",
   },
   welcomeTitle: {
-    color: "#173826",
-    fontSize: 32,
-    lineHeight: 37,
-    fontWeight: "400",
-    letterSpacing: 0,
-    fontFamily: serifFont,
+    ...typography.role.helper,
+    color: "rgba(31,41,51,0.66)",
+    fontSize: 17,
+    lineHeight: 25,
+    textAlign: "center",
+    marginTop: 0,
+    maxWidth: 260,
   },
   welcomeBody: {
-    color: "rgba(31,41,51,0.68)",
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: "500",
-    marginTop: 10,
+    ...typography.role.metadata,
+    color: "rgba(31,41,51,0.48)",
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: "center",
+    marginTop: 8,
+    maxWidth: 232,
   },
   welcomeStepsCard: {
     backgroundColor: "rgba(247,243,234,0.78)",
@@ -5654,21 +5751,23 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   welcomeButton: {
-    backgroundColor: colors.accent,
+    backgroundColor: "rgba(255,248,237,0.34)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.18)",
     borderRadius: 999,
-    paddingVertical: 15,
+    paddingVertical: 14,
+    paddingHorizontal: 28,
+    minHeight: 52,
+    minWidth: 156,
     alignItems: "center",
-    shadowColor: "#315F52",
-    shadowOffset: { width: 0, height: 7 },
-    shadowOpacity: 0.11,
-    shadowRadius: 15,
-    elevation: 4,
+    justifyContent: "center",
+    marginBottom: 12,
   },
   welcomeButtonText: {
-    color: "#FFF8ED",
-    fontSize: 16,
-    lineHeight: 22,
-    fontWeight: "900",
+    ...typography.role.button,
+    color: colors.accentDark,
+    fontSize: 15,
+    lineHeight: 20,
   },
   headerRow: {
     flexDirection: "row",
@@ -6245,10 +6344,10 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   lastBookMomentText: {
-    ...typography.role.prose,
+    ...typography.role.body,
     color: "rgba(31,41,51,0.58)",
     fontSize: 13,
-    lineHeight: 19,
+    lineHeight: 20,
     marginTop: 6,
   },
   manualLogButton: {
@@ -6499,7 +6598,7 @@ const styles = StyleSheet.create({
     borderColor: "transparent",
   },
   emptySessionsText: {
-    ...typography.role.prose,
+    ...typography.role.helper,
     color: "rgba(107,114,128,0.68)",
     fontSize: 13,
     lineHeight: 20,
@@ -6979,6 +7078,13 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     marginTop: 7,
   },
+  finishedBooksEmptyHelper: {
+    ...typography.role.helper,
+    color: "rgba(31,41,51,0.42)",
+    fontSize: 13,
+    lineHeight: 20,
+    marginTop: 10,
+  },
   finishedBooksShelf: {
     marginTop: 28,
     backgroundColor: "transparent",
@@ -7048,14 +7154,14 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   finishedBookReview: {
-    ...typography.role.prose,
-    color: "#6B6560",
+    ...typography.role.body,
+    color: "rgba(31,41,51,0.58)",
     fontSize: 13,
-    lineHeight: 19,
+    lineHeight: 20,
     marginTop: 10,
     paddingLeft: 10,
     borderLeftWidth: 1,
-    borderLeftColor: "rgba(196,148,90,0.32)",
+    borderLeftColor: "rgba(196,148,90,0.2)",
   },
   finishedBookSeparator: {
     height: 1,
@@ -7064,6 +7170,14 @@ const styles = StyleSheet.create({
   },
   finishedBookDetailContent: {
     paddingHorizontal: 24,
+  },
+  finishedBookDetailBackButton: {
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    borderColor: "transparent",
+    paddingHorizontal: 2,
+    paddingVertical: 8,
+    marginBottom: 18,
   },
   finishedBookDetailHero: {
     alignItems: "center",
@@ -7125,13 +7239,13 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   finishedBookDetailMetaCard: {
-    backgroundColor: "rgba(255,248,237,0.62)",
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.06)",
-    borderRadius: 18,
-    paddingVertical: 8,
-    paddingHorizontal: 18,
-    marginTop: 26,
+    backgroundColor: "rgba(255,248,237,0.30)",
+    borderWidth: 0,
+    borderColor: "transparent",
+    borderRadius: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginTop: 28,
   },
   finishedBookDetailMetaRow: {
     flexDirection: "row",
@@ -7142,33 +7256,34 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   finishedBookDetailMetaLabel: {
-    ...typography.role.label,
-    color: "#8A8578",
+    ...typography.role.metadata,
+    color: "rgba(90,84,72,0.58)",
     fontSize: 12,
     lineHeight: 17,
   },
   finishedBookDetailMetaValue: {
     ...typography.role.metadata,
-    color: "#1A1A14",
+    color: "rgba(26,26,20,0.72)",
     fontSize: 13,
     lineHeight: 18,
     textAlign: "right",
   },
   finishedBookDetailMetaDivider: {
     height: 1,
-    backgroundColor: "rgba(47,93,80,0.07)",
+    backgroundColor: "rgba(47,93,80,0.035)",
   },
   finishedBookDetailReviewCard: {
-    backgroundColor: "rgba(196,148,90,0.08)",
-    borderWidth: 1,
-    borderColor: "rgba(196,148,90,0.14)",
-    borderRadius: 18,
-    padding: 16,
-    marginTop: 18,
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    borderColor: "transparent",
+    borderRadius: 0,
+    paddingVertical: 2,
+    paddingHorizontal: 2,
+    marginTop: 24,
   },
   finishedBookDetailReviewLabel: {
-    ...typography.role.label,
-    color: "#C4945A",
+    ...typography.role.metadata,
+    color: "rgba(196,148,90,0.72)",
     fontSize: 10,
     lineHeight: 14,
     letterSpacing: 1,
@@ -7177,9 +7292,9 @@ const styles = StyleSheet.create({
   },
   finishedBookDetailReview: {
     ...typography.role.prose,
-    color: "#5A5448",
-    fontSize: 15,
-    lineHeight: 23,
+    color: "rgba(90,84,72,0.78)",
+    fontSize: 16,
+    lineHeight: 26,
   },
   finishedBooksNextCard: {
     backgroundColor: "rgba(196,148,90,0.08)",
@@ -7366,40 +7481,39 @@ const styles = StyleSheet.create({
     backgroundColor: "transparent",
   },
   closeTransitionEyebrow: {
-    color: "rgba(255,255,255,0.64)",
-    fontSize: 15,
-    lineHeight: 22,
-    fontWeight: "900",
-    letterSpacing: 1.3,
+    ...typography.role.metadata,
+    color: "rgba(255,248,237,0.54)",
+    fontSize: 11,
+    lineHeight: 17,
+    letterSpacing: 1.5,
     textTransform: "uppercase",
     textAlign: "center",
-    marginBottom: 14,
+    marginBottom: 12,
   },
   closeTransitionTitle: {
+    ...typography.role.pageTitle,
     color: "#FFF8ED",
-    fontFamily: serifFont,
-    fontSize: 36,
-    lineHeight: 43,
-    fontWeight: "400",
-    letterSpacing: -0.85,
+    fontSize: 34,
+    lineHeight: 42,
+    letterSpacing: -0.45,
     textAlign: "center",
   },
   closeTransitionMinutes: {
-    color: "rgba(255,255,255,0.72)",
-    fontSize: 18,
-    lineHeight: 25,
-    fontWeight: "800",
+    ...typography.role.metadata,
+    color: "rgba(255,248,237,0.58)",
+    fontSize: 14,
+    lineHeight: 20,
     textAlign: "center",
-    marginTop: 18,
+    marginTop: 16,
   },
   closeTransitionSubtext: {
-    color: "rgba(255,255,255,0.52)",
+    ...typography.role.body,
+    color: "rgba(255,248,237,0.58)",
     fontSize: 15,
-    lineHeight: 23,
-    fontWeight: "600",
+    lineHeight: 24,
     textAlign: "center",
-    marginTop: 18,
-    maxWidth: 280,
+    marginTop: 20,
+    maxWidth: 292,
   },
   closeSessionScreen: {
     flex: 1,
@@ -7589,9 +7703,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   manualNoteInput: {
-    minHeight: 76,
+    minHeight: 88,
     fontSize: 16,
-    lineHeight: 23,
+    lineHeight: 24,
     paddingTop: 12,
   },
   manualPresetRow: {
@@ -7644,16 +7758,36 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: "transparent",
   },
+  manualLogActionStack: {
+    width: "100%",
+    gap: 10,
+    backgroundColor: "transparent",
+  },
   manualLogFooter: {
     backgroundColor: "rgba(27,66,52,0.96)",
-    paddingTop: 10,
+    paddingTop: 12,
     borderTopWidth: 1,
     borderTopColor: "rgba(255,248,237,0.10)",
   },
   manualLogInlineActions: {
     backgroundColor: "transparent",
-    marginTop: 14,
-    marginBottom: 8,
+    marginTop: 22,
+    marginBottom: 12,
+  },
+  manualLogPrimaryAction: {
+    flex: 0,
+    width: "100%",
+    minHeight: 54,
+    justifyContent: "center",
+  },
+  manualLogSecondaryAction: {
+    flex: 0,
+    width: "100%",
+    minHeight: 44,
+    backgroundColor: "transparent",
+    borderWidth: 0,
+    paddingVertical: 10,
+    justifyContent: "center",
   },
   closeSecondaryButton: {
     flex: 1,
@@ -8175,8 +8309,16 @@ const styles = StyleSheet.create({
   homeBlankLeafText: {
     ...typography.role.bookTitle,
     color: "rgba(47,93,80,0.64)",
-    fontSize: 17,
-    lineHeight: 27,
+    fontSize: 22,
+    lineHeight: 30,
+    textAlign: "center",
+  },
+  homeBlankLeafSubtext: {
+    ...typography.role.helper,
+    color: "rgba(31,41,51,0.52)",
+    fontSize: 14,
+    lineHeight: 22,
+    marginTop: 10,
     textAlign: "center",
   },
   bookShrineCopy: {
@@ -8256,18 +8398,22 @@ const styles = StyleSheet.create({
     borderRadius: 170,
     backgroundColor: "rgba(224,204,166,0.18)",
   },
+  bookInputFadeShell: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
   bookReturnContent: {
     flexGrow: 1,
     justifyContent: "center",
     backgroundColor: "transparent",
-    paddingVertical: 36,
+    paddingVertical: 42,
   },
   bookReturnContentTall: {
     justifyContent: "flex-start",
-    paddingVertical: 22,
+    paddingVertical: 30,
   },
   bookReturnContentStepOneTall: {
-    paddingVertical: 12,
+    paddingVertical: 20,
   },
   bookReturnTopSkipButton: {
     marginBottom: 18,
@@ -8292,19 +8438,20 @@ const styles = StyleSheet.create({
   },
   bookReturnEyebrow: {
     ...typography.role.metadata,
-    color: "rgba(47,93,80,0.40)",
-    fontSize: 11,
-    lineHeight: 19,
-    letterSpacing: 0.5,
+    color: "rgba(47,93,80,0.34)",
+    fontSize: 10,
+    lineHeight: 16,
+    letterSpacing: 0.9,
     textAlign: "center",
-    marginBottom: 10,
+    marginBottom: 8,
+    textTransform: "uppercase",
   },
   bookReturnTitle: {
     ...typography.role.pageTitle,
     color: "#1B2A22",
-    fontSize: 34,
-    lineHeight: 41,
-    letterSpacing: -0.9,
+    fontSize: 32,
+    lineHeight: 39,
+    letterSpacing: -0.55,
     textAlign: "center",
   },
   bookReturnTitleCompact: {
@@ -8313,7 +8460,7 @@ const styles = StyleSheet.create({
   },
   bookReturnHelperLine: {
     ...typography.role.helper,
-    color: "rgba(31,41,51,0.62)",
+    color: "rgba(31,41,51,0.56)",
     fontSize: 15,
     lineHeight: 22,
     textAlign: "center",
@@ -8326,12 +8473,12 @@ const styles = StyleSheet.create({
   },
   bookReturnMinutes: {
     ...typography.role.metadata,
-    color: "rgba(31,41,51,0.58)",
-    fontSize: 15,
-    lineHeight: 22,
+    color: "rgba(31,41,51,0.46)",
+    fontSize: 13,
+    lineHeight: 19,
     textAlign: "center",
-    marginTop: 9,
-    marginBottom: 20,
+    marginTop: 10,
+    marginBottom: 26,
   },
   bookReturnMinutesCompact: {
     fontSize: 12,
@@ -8342,8 +8489,8 @@ const styles = StyleSheet.create({
   bookAttributionCard: {
     backgroundColor: "transparent",
     borderRadius: 0,
-    paddingHorizontal: 2,
-    paddingVertical: 6,
+    paddingHorizontal: 0,
+    paddingVertical: 4,
     borderWidth: 0,
     borderColor: "transparent",
   },
@@ -8402,21 +8549,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "transparent",
+    backgroundColor: "rgba(255,248,237,0.34)",
     borderWidth: 0,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(47,93,80,0.14)",
-    borderRadius: 0,
-    paddingHorizontal: 0,
-    paddingVertical: 13,
+    borderBottomColor: "rgba(47,93,80,0.09)",
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
   },
   bookAttributionInput: {
     ...typography.role.body,
     flex: 1,
     minWidth: 0,
     color: colors.text,
-    fontSize: 21,
-    lineHeight: 27,
+    fontSize: 20,
+    lineHeight: 26,
     padding: 0,
   },
   bookAttributionClearButton: {
@@ -8429,20 +8576,21 @@ const styles = StyleSheet.create({
   },
   bookAttributionSelectedText: {
     ...typography.role.metadata,
-    color: "rgba(47,93,80,0.54)",
+    color: "rgba(47,93,80,0.46)",
     fontSize: 12,
     lineHeight: 17,
-    marginTop: 8,
+    marginTop: 9,
   },
   bookAttributionReviewCard: {
-    backgroundColor: "rgba(255,248,237,0.36)",
-    borderRadius: 20,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.055)",
+    backgroundColor: "rgba(255,248,237,0.24)",
+    borderRadius: 18,
+    paddingVertical: 13,
+    paddingHorizontal: 2,
+    borderWidth: 0,
+    borderColor: "transparent",
   },
   bookAttributionReviewCardStepTwo: {
-    marginTop: 14,
+    marginTop: 18,
   },
   bookAttributionReviewTopRow: {
     flexDirection: "row",
@@ -8467,8 +8615,8 @@ const styles = StyleSheet.create({
   bookAttributionReviewTitle: {
     ...typography.role.bookTitle,
     color: colors.text,
-    fontSize: 16,
-    lineHeight: 21,
+    fontSize: 17,
+    lineHeight: 23,
   },
   bookAttributionReviewAuthor: {
     ...typography.role.metadata,
@@ -8497,39 +8645,41 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   bookReflectionCard: {
-    marginTop: 12,
-    backgroundColor: "rgba(255,255,255,0.58)",
-    borderRadius: 22,
-    padding: 13,
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.07)",
-  },
-  bookReflectionLabel: {
-    ...typography.role.label,
-    color: "rgba(47,93,80,0.62)",
-    fontSize: 12,
-    lineHeight: 17,
-    marginBottom: 8,
-  },
-  bookReflectionInput: {
-    ...typography.role.body,
-    minHeight: 82,
-    backgroundColor: "#FFFDF8",
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.12)",
-    borderRadius: 16,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: colors.text,
-    fontSize: 15,
-    lineHeight: 21,
-  },
-  bookLookupPanel: {
-    marginTop: 14,
+    marginTop: 18,
     backgroundColor: "transparent",
     borderRadius: 0,
     paddingHorizontal: 2,
-    paddingVertical: 8,
+    paddingVertical: 0,
+    borderWidth: 0,
+    borderColor: "transparent",
+  },
+  bookReflectionLabel: {
+    ...typography.role.label,
+    color: "rgba(47,93,80,0.52)",
+    fontSize: 12,
+    lineHeight: 17,
+    marginBottom: 9,
+  },
+  bookReflectionInput: {
+    ...typography.role.body,
+    minHeight: 96,
+    backgroundColor: "rgba(255,248,237,0.34)",
+    borderWidth: 0,
+    borderBottomWidth: 1,
+    borderColor: "rgba(47,93,80,0.09)",
+    borderRadius: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    color: colors.text,
+    fontSize: 15,
+    lineHeight: 22,
+  },
+  bookLookupPanel: {
+    marginTop: 22,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    paddingHorizontal: 0,
+    paddingVertical: 10,
     borderWidth: 0,
     borderColor: "transparent",
   },
@@ -8542,10 +8692,10 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   bookLookupTitle: {
-    color: "rgba(31,41,51,0.58)",
+    color: "rgba(31,41,51,0.50)",
     fontSize: 12,
     lineHeight: 17,
-    fontWeight: "700",
+    fontWeight: "600",
   },
   bookLookupTitleAttribution: {
     ...typography.role.label,
@@ -8582,16 +8732,16 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     fontWeight: "500",
-    marginBottom: 4,
+    marginBottom: 7,
   },
   bookLookupChoice: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
     backgroundColor: "transparent",
-    paddingVertical: 10,
+    paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(47,93,80,0.045)",
+    borderBottomColor: "rgba(47,93,80,0.035)",
   },
   bookLookupChoiceSelected: {
     backgroundColor: "rgba(47,93,80,0.035)",
@@ -8667,32 +8817,32 @@ const styles = StyleSheet.create({
     textAlign: "right",
   },
   recentBookPicker: {
-    marginTop: 8,
+    marginTop: 16,
     backgroundColor: "transparent",
     borderRadius: 0,
-    paddingHorizontal: 2,
-    paddingVertical: 8,
+    paddingHorizontal: 0,
+    paddingVertical: 10,
     borderWidth: 0,
     borderColor: "transparent",
   },
   recentBookPickerTitle: {
     ...typography.role.label,
-    color: "rgba(31,41,51,0.58)",
+    color: "rgba(31,41,51,0.50)",
     fontSize: 12,
     lineHeight: 17,
     marginBottom: 6,
   },
   recentBookChoiceScroll: {
-    maxHeight: 150,
+    maxHeight: 168,
   },
   recentBookChoice: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
     backgroundColor: "transparent",
-    paddingVertical: 10,
+    paddingVertical: 15,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(47,93,80,0.045)",
+    borderBottomColor: "rgba(47,93,80,0.035)",
   },
   recentBookMiniCover: {
     width: 34,
@@ -8731,11 +8881,11 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   bookManualEntryHint: {
-    marginTop: 8,
-    backgroundColor: "rgba(47,93,80,0.035)",
-    borderRadius: 14,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
+    marginTop: 12,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+    paddingHorizontal: 2,
+    paddingVertical: 8,
     borderWidth: 0,
     borderColor: "transparent",
   },
@@ -8753,12 +8903,13 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   bookCompletedCard: {
-    marginTop: 12,
-    backgroundColor: "rgba(255,255,255,0.42)",
-    borderRadius: 22,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.055)",
+    marginTop: 16,
+    backgroundColor: "rgba(255,248,237,0.26)",
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 2,
+    borderWidth: 0,
+    borderColor: "transparent",
   },
   bookCompletedToggle: {
     flexDirection: "row",
@@ -8776,8 +8927,8 @@ const styles = StyleSheet.create({
   bookCompletedLabel: {
     ...typography.role.label,
     color: colors.text,
-    fontSize: 16,
-    lineHeight: 22,
+    fontSize: 15,
+    lineHeight: 21,
   },
   bookCompletedSubtext: {
     ...typography.role.helper,
@@ -8825,8 +8976,8 @@ const styles = StyleSheet.create({
   bookReturnSecondaryButton: {
     flex: 1,
     backgroundColor: "transparent",
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
+    borderWidth: 0,
+    borderColor: "transparent",
     paddingVertical: 15,
     borderRadius: 18,
     alignItems: "center",
@@ -8845,7 +8996,7 @@ const styles = StyleSheet.create({
   },
   bookReturnSaveButton: {
     flex: 1,
-    backgroundColor: colors.accentDark,
+    backgroundColor: "rgba(47,93,80,0.92)",
     paddingVertical: 15,
     borderRadius: 18,
     alignItems: "center",
@@ -8869,15 +9020,19 @@ const styles = StyleSheet.create({
     color: "rgba(47,93,80,0.42)",
   },
   bookAttributionBottomActions: {
-    marginTop: 18,
+    marginTop: 24,
   },
   bookAttributionBottomActionsStepOne: {
-    marginTop: 12,
+    marginTop: 18,
+  },
+  bookAttributionBottomActionsKeyboard: {
+    marginTop: 28,
+    paddingBottom: 12,
   },
   bookAttributionBottomActionsFinal: {
     flexDirection: "column-reverse",
     gap: 10,
-    marginTop: 20,
+    marginTop: 26,
   },
   bookRevealScreen: {
     flex: 1,
@@ -8911,27 +9066,26 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   bookRevealEyebrow: {
-    color: "rgba(47,93,80,0.62)",
-    fontSize: 13,
-    lineHeight: 19,
-    fontWeight: "700",
-    letterSpacing: 1.4,
+    ...typography.role.metadata,
+    color: "rgba(47,93,80,0.46)",
+    fontSize: 10,
+    lineHeight: 16,
+    letterSpacing: 1.35,
     textTransform: "uppercase",
     textAlign: "center",
-    marginBottom: 9,
+    marginBottom: 8,
   },
   bookRevealEyebrowCompact: {
     marginBottom: 5,
   },
   bookRevealTitle: {
+    ...typography.role.pageTitle,
     color: "#1B2A22",
-    fontSize: 34,
-    lineHeight: 41,
-    fontWeight: "400",
-    letterSpacing: -0.8,
+    fontSize: 32,
+    lineHeight: 40,
+    letterSpacing: -0.45,
     textAlign: "center",
-    marginBottom: 10,
-    fontFamily: serifFont,
+    marginBottom: 14,
   },
   bookRevealTitleCompact: {
     fontSize: 28,
@@ -8942,13 +9096,13 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 16,
-    backgroundColor: "rgba(255,255,255,0.72)",
-    borderRadius: 30,
-    padding: 16,
+    backgroundColor: "rgba(255,248,237,0.46)",
+    borderRadius: 24,
+    paddingVertical: 15,
+    paddingHorizontal: 14,
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
-    marginBottom: 6,
-    ...cardShadow,
+    borderColor: "rgba(47,93,80,0.055)",
+    marginBottom: 8,
   },
   bookRevealCardCompact: {
     gap: 12,
@@ -9013,17 +9167,16 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   bookRevealBookTitle: {
+    ...typography.role.bookTitle,
     color: colors.text,
-    fontSize: 21,
+    fontSize: 20,
     lineHeight: 27,
-    fontWeight: "400",
-    fontFamily: serifFont,
   },
   bookRevealMeta: {
-    color: colors.mutedText,
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: "500",
+    ...typography.role.metadata,
+    color: "rgba(31,41,51,0.50)",
+    fontSize: 13,
+    lineHeight: 19,
     marginTop: 6,
   },
   bookRevealMetaCompact: {
@@ -9032,24 +9185,24 @@ const styles = StyleSheet.create({
     marginTop: 5,
   },
   bookRevealNoteSaved: {
-    color: "rgba(47,93,80,0.62)",
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: "600",
+    ...typography.role.metadata,
+    color: "rgba(47,93,80,0.52)",
+    fontSize: 13,
+    lineHeight: 19,
     textAlign: "center",
-    marginTop: 4,
+    marginTop: 6,
   },
   bookRevealContinueButton: {
-    backgroundColor: colors.accentDark,
+    backgroundColor: "rgba(47,93,80,0.92)",
     borderRadius: 999,
-    paddingVertical: 16,
+    paddingVertical: 15,
     alignItems: "center",
   },
   bookRevealContinueButtonText: {
+    ...typography.role.button,
     color: "#FFF8ED",
-    fontSize: 16,
-    lineHeight: 22,
-    fontWeight: "700",
+    fontSize: 15,
+    lineHeight: 21,
   },
   bookRevealSecondaryButton: {
     alignItems: "center",
@@ -9207,16 +9360,29 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(240,235,224,0.1)",
   },
   completedBookMetaCard: {
-    width: "100%",
-    paddingVertical: 2,
+    width: "92%",
+    maxWidth: 328,
+    alignSelf: "center",
+    backgroundColor: "rgba(255,248,237,0.24)",
+    paddingVertical: 4,
     paddingHorizontal: 14,
-    marginTop: 14,
+    marginTop: 16,
   },
   completedBookMetaCardCompact: {
     marginTop: 8,
   },
   completedBookMetaRow: {
-    paddingVertical: 8,
+    minHeight: 40,
+    paddingHorizontal: 2,
+    paddingVertical: 9,
+  },
+  completedBookMetaLabel: {
+    flex: 1,
+    minWidth: 0,
+  },
+  completedBookMetaValue: {
+    minWidth: 92,
+    flexShrink: 0,
   },
   completedBookHeadline: {
     color: "#1A1A14",
@@ -9237,7 +9403,9 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   completedBookReflectionWrap: {
-    width: "100%",
+    width: "92%",
+    maxWidth: 328,
+    alignSelf: "center",
   },
   completedBookInlineActions: {
     width: "100%",
@@ -9245,30 +9413,32 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   completedBookReflectionLabel: {
-    color: "#C4945A",
+    ...typography.role.metadata,
+    color: "rgba(196,148,90,0.74)",
     fontSize: 10,
     lineHeight: 14,
-    fontWeight: "800",
     letterSpacing: 1,
     textTransform: "uppercase",
-    marginBottom: 6,
+    marginBottom: 7,
   },
   completedBookReflectionInput: {
-    minHeight: 64,
-    backgroundColor: "rgba(255,248,237,0.58)",
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.08)",
-    borderRadius: 18,
-    padding: 10,
+    ...typography.role.body,
+    minHeight: 76,
+    backgroundColor: "rgba(255,248,237,0.30)",
+    borderWidth: 0,
+    borderBottomWidth: 1,
+    borderColor: "rgba(47,93,80,0.07)",
+    borderRadius: 16,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
     color: "#5A5448",
     fontSize: 15,
-    lineHeight: 20,
-    fontStyle: "italic",
+    lineHeight: 22,
   },
   completedBookReturnButton: {
     width: "100%",
     minHeight: 48,
-    backgroundColor: colors.accentDark,
+    backgroundColor: "rgba(47,93,80,0.92)",
     borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
@@ -9277,20 +9447,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   completedBookReturnButtonText: {
+    ...typography.role.button,
     color: "#FFF8ED",
     fontSize: 15,
     lineHeight: 21,
-    fontWeight: "700",
   },
   completedBookSkipButton: {
-    paddingVertical: 8,
+    paddingVertical: 10,
     alignItems: "center",
   },
   completedBookSkipButtonText: {
+    ...typography.role.button,
     color: "rgba(47,93,80,0.62)",
-    fontSize: 15,
-    lineHeight: 21,
-    fontWeight: "600",
+    fontSize: 14,
+    lineHeight: 20,
     textAlign: "center",
   },
 
