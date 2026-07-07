@@ -5208,7 +5208,7 @@ export default function HomeScreen() {
                 adjustsFontSizeToFit
                 minimumFontScale={0.88}
               >
-                Start reading
+                Rest your phone and begin
               </ThemedText>
               <ThemedText
                 style={styles.startHeroHelper}
