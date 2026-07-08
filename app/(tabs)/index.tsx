@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
+import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import { usePostHog } from "posthog-react-native";
 import { useEffect, useRef, useState } from "react";
@@ -4773,7 +4774,7 @@ export default function HomeScreen() {
                             <Ionicons
                               name="trash-outline"
                               size={16}
-                              color="rgba(180,83,58,0.62)"
+                              color="rgba(180,83,58,0.42)"
                             />
                           </Pressable>
                         </View>
@@ -5192,16 +5193,23 @@ export default function HomeScreen() {
       return (
     <Animated.ScrollView
       style={[styles.screen, { opacity: homeEntryOpacity }]}
-      contentContainerStyle={[
-        styles.scrollContent,
-        { paddingBottom: Math.max(insets.bottom + 28, 44) },
-      ]}
+      contentContainerStyle={styles.scrollContent}
     >
       <ThemedView
-        style={[styles.container, { paddingTop: insets.top + 32 }]}
+        style={[
+          styles.container,
+          {
+            paddingTop: insets.top + 32,
+            paddingBottom: 54 + Math.max(insets.bottom + 28, 44),
+          },
+        ]}
       >
+        <LinearGradient
+          pointerEvents="none"
+          colors={["#F7F3EA", "#F1E9DC"]}
+          style={styles.homeCanvasGradient}
+        />
         <View pointerEvents="none" style={styles.warmVignetteTop} />
-        <View pointerEvents="none" style={styles.warmVignetteBottom} />
         <View pointerEvents="none" style={styles.mountainBackdrop}>
           <View style={styles.mountainFarLeft} />
           <View style={styles.mountainFarCenter} />
@@ -5535,23 +5543,17 @@ const styles = StyleSheet.create({
     gap: 12,
     backgroundColor: colors.background,
   },
+  homeCanvasGradient: {
+    ...StyleSheet.absoluteFillObject,
+  },
   warmVignetteTop: {
     position: "absolute",
-    top: -80,
+    top: -150,
     left: -80,
     right: -80,
-    height: 230,
-    borderRadius: 140,
-    backgroundColor: "rgba(255,255,255,0.38)",
-  },
-  warmVignetteBottom: {
-    position: "absolute",
-    left: -90,
-    right: -90,
-    bottom: 230,
-    height: 260,
-    borderRadius: 150,
-    backgroundColor: "rgba(224,204,166,0.14)",
+    height: 340,
+    borderRadius: 190,
+    backgroundColor: "rgba(255,255,255,0.22)",
   },
   mountainBackdrop: {
     position: "absolute",
@@ -6597,12 +6599,17 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 74,
     justifyContent: "center",
-    backgroundColor: "rgba(255,248,237,0.28)",
-    borderWidth: 0,
-    borderColor: "transparent",
+    backgroundColor: "rgba(255,248,237,0.82)",
+    borderWidth: 1,
+    borderColor: "rgba(196,148,90,0.16)",
     borderRadius: 16,
     paddingVertical: 19,
     paddingHorizontal: 12,
+    shadowColor: "#C4945A",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.105,
+    shadowRadius: 20,
+    elevation: 2,
   },
   homeShortcutDestinationRow: {
     flexDirection: "row",
@@ -6983,7 +6990,7 @@ const styles = StyleSheet.create({
   },
   diaryDateHeader: {
     ...typography.role.label,
-    color: "rgba(47,93,80,0.62)",
+    color: "rgba(47,93,80,0.54)",
     fontSize: 13,
     lineHeight: 18,
     letterSpacing: 1,
@@ -6991,11 +6998,17 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   diaryEntryCard: {
-    backgroundColor: "transparent",
-    borderRadius: 0,
-    borderWidth: 0,
+    backgroundColor: "rgba(255,248,237,0.42)",
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(196,148,90,0.14)",
     paddingVertical: 18,
     paddingHorizontal: 2,
+    shadowColor: "#C4945A",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.045,
+    shadowRadius: 10,
+    elevation: 1,
   },
   diaryEntryTopRow: {
     flexDirection: "row",
@@ -7062,15 +7075,17 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(180,83,58,0.035)",
-    opacity: 0.7,
+    backgroundColor: "rgba(180,83,58,0.018)",
+    opacity: 0.62,
     marginTop: -4,
   },
   diaryReflection: {
-    ...typography.role.prose,
-    color: "rgba(31,41,51,0.68)",
-    fontSize: 16,
-    lineHeight: 25,
+    fontFamily: typography.fontFamily.serifRegular,
+    fontWeight: "400",
+    fontStyle: "italic",
+    color: "rgba(31,42,46,0.72)",
+    fontSize: 15,
+    lineHeight: 22,
     marginTop: 15,
   },
   finishedBooksHomeButton: {
@@ -8334,12 +8349,16 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     backgroundColor: "rgba(255,248,237,0.82)",
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.09)",
+    borderColor: "rgba(196,148,90,0.16)",
     paddingTop: 22,
     paddingHorizontal: 20,
     paddingBottom: 24,
     zIndex: 2,
-    ...softCardShadow,
+    shadowColor: "#C4945A",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.105,
+    shadowRadius: 20,
+    elevation: 2,
   },
   bookShrineWarmGlow: {
     position: "absolute",
