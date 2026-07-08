@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { StatusBar } from "expo-status-bar";
+import { usePostHog } from "posthog-react-native";
 import { useEffect, useRef, useState } from "react";
 import {
   Alert,
@@ -132,6 +133,8 @@ type SavingAction =
   | "completedBookSkip"
   | null;
 
+type AnalyticsProperties = Record<string, string | number | boolean>;
+
 type SanctuaryStage = {
   stage: number;
   title: string;
@@ -185,13 +188,8 @@ const sanctuaryStages: SanctuaryStage[] = [
   },
 ];
 
-const readingRitualLines = [
-  "The book is waiting.",
-  "Take your time.",
-  "You're here.",
-  "This is enough.",
-  "The rest can wait a little while.",
-];
+const readingThresholdTitle = "You may set the phone down now.";
+const readingThresholdBody = "Return when you’re ready.";
 
 const completedBookReflectionPrompts = [
   "What did this book give you?",
@@ -405,6 +403,24 @@ function getDisplaySessionTitle(title?: string | null) {
   return isUnattachedSessionTitle(title)
     ? UNATTACHED_SESSION_DISPLAY_TITLE
     : title || UNATTACHED_SESSION_DISPLAY_TITLE;
+}
+
+function getReadingDurationBucket(seconds: number) {
+  const minutes = seconds / 60;
+
+  if (minutes < 5) return "under_5_minutes";
+  if (minutes < 15) return "5_to_14_minutes";
+  if (minutes < 30) return "15_to_29_minutes";
+  if (minutes < 60) return "30_to_59_minutes";
+  if (minutes < 120) return "1_to_2_hours";
+  return "over_2_hours";
+}
+
+function getSessionCountBucket(sessionCount: number) {
+  if (sessionCount <= 1) return "1";
+  if (sessionCount <= 3) return "2_to_3";
+  if (sessionCount <= 10) return "4_to_10";
+  return "over_10";
 }
 
 function getBookMetadataFields(
@@ -870,6 +886,7 @@ function mergeCompletedBookReview(
 
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
+  const posthog = usePostHog();
   const [isReading, setIsReading] = useState(false);
   const [seconds, setSeconds] = useState(0);
   const [lifetimeSeconds, setLifetimeSeconds] = useState(0);
@@ -937,7 +954,6 @@ export default function HomeScreen() {
   const [sanctuaryReveal, setSanctuaryReveal] =
     useState<SanctuaryReveal | null>(null);
   const [sessionReflection, setSessionReflection] = useState("");
-  const [ritualLineText, setRitualLineText] = useState(readingRitualLines[0]);
   const [manualLogNote, setManualLogNote] = useState("");
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [bookTitleFocused, setBookTitleFocused] = useState(false);
@@ -1000,6 +1016,17 @@ export default function HomeScreen() {
   const endSavingAction = () => {
     savingActionRef.current = null;
     setSavingAction(null);
+  };
+
+  const captureAnalyticsEvent = (
+    eventName: string,
+    properties?: AnalyticsProperties,
+  ) => {
+    try {
+      posthog.capture(eventName, properties);
+    } catch (error) {
+      warnInDev("Rousd analytics capture failed.", error);
+    }
   };
 
   useEffect(() => {
@@ -1337,10 +1364,6 @@ export default function HomeScreen() {
     ritualLineOpacity.setValue(0);
     ritualLineTranslateY.setValue(8);
     ritualBreath.setValue(0);
-    setRitualLineText(
-      readingRitualLines[Math.floor(Math.random() * readingRitualLines.length)],
-    );
-
     const breathAnimation = Animated.loop(
       Animated.sequence([
         Animated.timing(ritualBreath, {
@@ -1379,7 +1402,7 @@ export default function HomeScreen() {
           useNativeDriver: true,
         }),
       ]),
-      Animated.delay(1650),
+      Animated.delay(3000),
       Animated.parallel([
         Animated.timing(ritualOpacity, {
           toValue: 0,
@@ -1949,6 +1972,10 @@ export default function HomeScreen() {
         [ACTIVE_SESSION_TODAY_START_SECONDS_KEY, String(seconds)],
         [ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY, String(lifetimeSeconds)],
       ]);
+
+      captureAnalyticsEvent("reading_session_started", {
+        has_current_book: Boolean(getValidBookTitle(currentBookTitle)),
+      });
     } else if (activeSessionStartTime) {
       isEndingSessionRef.current = true;
       setIsExitingReading(true);
@@ -1982,6 +2009,10 @@ export default function HomeScreen() {
           ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
           ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
         ]);
+
+        captureAnalyticsEvent("reading_session_ended", {
+          duration_bucket: getReadingDurationBucket(sessionSeconds),
+        });
       } catch (error) {
         warnInDev("Rousd failed to preserve pending timed session.", error);
         isEndingSessionRef.current = false;
@@ -2297,6 +2328,16 @@ export default function HomeScreen() {
       ...metadataFields,
     });
 
+    captureAnalyticsEvent("reading_session_saved", {
+      source: "timed",
+      attribution: isUnattachedSession ? "unattributed" : "book",
+      attribution_source: isUnattachedSession
+        ? "unattributed"
+        : bookMetadata?.source ?? "manual",
+      duration_bucket: getReadingDurationBucket(sessionSeconds),
+      reflection_added: Boolean(trimmedReflection),
+    });
+
     return {
       sessionId: newSession.id,
       sessionMinutes,
@@ -2412,6 +2453,11 @@ export default function HomeScreen() {
     try {
       const savedSession = await saveSession(UNATTACHED_SESSION_TITLE);
 
+      captureAnalyticsEvent("book_attribution_skipped", {
+        source: "timed",
+        duration_bucket: getReadingDurationBucket(pendingSessionSeconds),
+      });
+
       setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
       setShowBookCompletedInput(false);
       setBookAttributionStep("choose");
@@ -2420,7 +2466,8 @@ export default function HomeScreen() {
       setHasUserEditedBookQuery(false);
       setBookLookupResults([]);
       setBookLookupError(false);
-      setScreen("reveal");
+      setSanctuaryReveal(null);
+      setScreen("home");
 
       setTimeout(() => {
         setSessionMessage(null);
@@ -2594,6 +2641,13 @@ export default function HomeScreen() {
         reviewOverride ?? completedBookReview,
         completedBookMoment,
       );
+
+      captureAnalyticsEvent("completed_book_saved", {
+        review_added: Boolean((reviewOverride ?? completedBookReview).trim()),
+        session_count_bucket: getSessionCountBucket(
+          completedBookMoment.sessionCount,
+        ),
+      });
     } catch (error) {
       warnInDev("Rousd failed to save finished book review.", error);
       setCompletedBookReviewError("That review didn't save. Try once more.");
@@ -2794,6 +2848,16 @@ export default function HomeScreen() {
 
     setSessionMessage(`+${sessionDuration} saved`);
 
+    captureAnalyticsEvent("reading_session_saved", {
+      source: "manual_log",
+      attribution: isUnattachedSessionTitle(titleToSave) ? "unattributed" : "book",
+      attribution_source: isUnattachedSessionTitle(titleToSave)
+        ? "unattributed"
+        : selectedManualMetadata?.source ?? "manual",
+      duration_bucket: getReadingDurationBucket(manualSessionSeconds),
+      reflection_added: Boolean(trimmedNote),
+    });
+
     setTimeout(() => {
       setSessionMessage(null);
     }, 3500);
@@ -2813,6 +2877,10 @@ export default function HomeScreen() {
 
     await AsyncStorage.setItem(SESSIONS_KEY, JSON.stringify(updatedSessions));
     setRecentSessions(updatedSessions);
+
+    captureAnalyticsEvent("reflection_saved", {
+      source: sanctuaryReveal.source,
+    });
   };
 
   const dismissSanctuaryReveal = async (options?: { saveReflection?: boolean }) => {
@@ -3007,7 +3075,7 @@ export default function HomeScreen() {
             +{pendingDuration} read
           </ThemedText>
           <ThemedText style={styles.closeTransitionSubtext}>
-            {"Take a breath. Then you can save this time to the book you read."}
+            {"Take a breath. Add a book or leave it as a reading moment."}
           </ThemedText>
         </Animated.View>
       </ThemedView>
@@ -3063,7 +3131,10 @@ export default function HomeScreen() {
               ]}
             >
               <ThemedText style={styles.ritualLineText}>
-                {ritualLineText}
+                {readingThresholdTitle}
+              </ThemedText>
+              <ThemedText style={styles.ritualLineBody}>
+                {readingThresholdBody}
               </ThemedText>
             </Animated.View>
           </View>
@@ -3184,7 +3255,7 @@ export default function HomeScreen() {
         shouldShowBookLookup ||
         visiblePickerSessions.length > 0;
       const attributionKeyboardBottomPadding =
-        insets.bottom + (isKeyboardVisible ? 320 : 88);
+        insets.bottom + (isKeyboardVisible ? 320 : 112);
       const shouldShowBookChoiceShortcuts =
         isChoosingBook && !isSearchingForBook;
       const continueToAttributionReflection = () => {
@@ -3702,6 +3773,9 @@ export default function HomeScreen() {
               isChoosingBook && styles.bookAttributionBottomActionsStepOne,
               isChoosingBook && isKeyboardVisible &&
                 styles.bookAttributionBottomActionsKeyboard,
+              isChoosingBook && !isKeyboardVisible && {
+                paddingBottom: Math.max(insets.bottom, 16) + 16,
+              },
               !isChoosingBook && styles.bookAttributionBottomActionsFinal,
             ]}
           >
@@ -5241,7 +5315,7 @@ export default function HomeScreen() {
                 adjustsFontSizeToFit
                 minimumFontScale={0.88}
               >
-                Rest your phone and begin
+                Begin reading
               </ThemedText>
               <ThemedText
                 style={styles.startHeroHelper}
@@ -5249,9 +5323,7 @@ export default function HomeScreen() {
                 adjustsFontSizeToFit
                 minimumFontScale={0.86}
               >
-                {shouldShowHomeBlankLeaf
-                  ? "You can name the book after you read."
-                  : "Select what you read after the session"}
+                Select what you read after the session
               </ThemedText>
             </View>
           </View>
@@ -7499,6 +7571,15 @@ const styles = StyleSheet.create({
     lineHeight: 36,
     textAlign: "center",
     maxWidth: 320,
+  },
+  ritualLineBody: {
+    ...typography.role.body,
+    color: "rgba(255,248,237,0.68)",
+    fontSize: 16,
+    lineHeight: 24,
+    textAlign: "center",
+    marginTop: 12,
+    maxWidth: 300,
   },
   closeTransitionScreen: {
     flex: 1,

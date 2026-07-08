@@ -5,6 +5,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
 import 'react-native-reanimated';
+import { PostHogProvider } from 'posthog-react-native';
 
 import { RousdPalette } from '@/constants/theme';
 import { typographyFontsToLoad } from '@/constants/typography';
@@ -56,6 +57,10 @@ const rousdDarkTheme = {
   },
 };
 
+const posthogApiKey = process.env.EXPO_PUBLIC_POSTHOG_API_KEY;
+const posthogHost = process.env.EXPO_PUBLIC_POSTHOG_HOST;
+const posthogEnabled = Boolean(posthogApiKey) && !__DEV__;
+
 export default Sentry.wrap(function RootLayout() {
   const colorScheme = useColorScheme();
   const [fontsLoaded, fontError] = useFonts(typographyFontsToLoad);
@@ -74,11 +79,22 @@ export default Sentry.wrap(function RootLayout() {
   }
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? rousdDarkTheme : rousdLightTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-      </Stack>
-      <StatusBar style="dark" />
-    </ThemeProvider>
+    <PostHogProvider
+      apiKey={posthogApiKey ?? 'posthog-disabled'}
+      options={{
+        host: posthogHost,
+        disabled: !posthogEnabled,
+        captureAppLifecycleEvents: true,
+        enableSessionReplay: false,
+      }}
+      autocapture={false}
+    >
+      <ThemeProvider value={colorScheme === 'dark' ? rousdDarkTheme : rousdLightTheme}>
+        <Stack>
+          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        </Stack>
+        <StatusBar style="dark" />
+      </ThemeProvider>
+    </PostHogProvider>
   );
 });
