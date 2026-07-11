@@ -14,6 +14,7 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Linking,
+  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -45,6 +46,7 @@ const ACTIVE_SESSION_TODAY_START_SECONDS_KEY =
   "activeReadingSessionTodayStartSeconds";
 const ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY =
   "activeReadingSessionLifetimeStartSeconds";
+const ACTIVE_SESSION_SELECTED_BOOK_KEY = "activeReadingSessionSelectedBook";
 const PENDING_POST_SESSION_DRAFT_KEY = "pendingPostSessionDraft";
 const LEGACY_UNATTACHED_SESSION_TITLE = "Unassigned reading";
 const UNATTACHED_SESSION_TITLE = "A reading moment";
@@ -120,6 +122,7 @@ type PendingPostSessionDraft = {
   endedAt: string;
   bookTitle?: string;
   bookAttributionStep?: BookAttributionStep;
+  startedWithSelectedBook?: boolean;
   completedBookReview?: string;
   showBookCompletedInput?: boolean;
   selectedBookMetadata?: BookMetadata | null;
@@ -406,6 +409,30 @@ function getDisplaySessionTitle(title?: string | null) {
     : title || UNATTACHED_SESSION_DISPLAY_TITLE;
 }
 
+function getHomeBookplateDisplayTitle(title?: string | null) {
+  const trimmedTitle = title?.trim().replace(/\s+/g, " ") ?? "";
+  if (!trimmedTitle) return "Choose later";
+  if (trimmedTitle.length <= 52) return trimmedTitle;
+
+  const appendEllipsis = (value: string) => {
+    const cleanedValue = value.trim().replace(/[.…]+$/u, "");
+    return cleanedValue ? `${cleanedValue}…` : "Choose later";
+  };
+
+  const [beforeColon] = trimmedTitle.split(":");
+  if (beforeColon && beforeColon.length >= 12 && beforeColon.length <= 52) {
+    return appendEllipsis(beforeColon);
+  }
+
+  const clampLimit = 38;
+  const truncatedTitle = trimmedTitle.slice(0, clampLimit).trimEnd();
+  const lastSpaceIndex = truncatedTitle.lastIndexOf(" ");
+  const readableTitle =
+    lastSpaceIndex >= 24 ? truncatedTitle.slice(0, lastSpaceIndex) : truncatedTitle;
+
+  return appendEllipsis(readableTitle);
+}
+
 function getReadingDurationBucket(seconds: number) {
   const minutes = seconds / 60;
 
@@ -422,6 +449,38 @@ function getSessionCountBucket(sessionCount: number) {
   if (sessionCount <= 3) return "2_to_3";
   if (sessionCount <= 10) return "4_to_10";
   return "over_10";
+}
+
+function getSavedConfirmationDurationCopy(
+  sessionMinutesText: string,
+  sessionMinutesValue?: number,
+) {
+  if (
+    typeof sessionMinutesValue === "number" &&
+    Number.isFinite(sessionMinutesValue)
+  ) {
+    if (sessionMinutesValue > 0 && sessionMinutesValue < 1) {
+      return "Less than a minute added";
+    }
+
+    if (sessionMinutesValue <= 0) {
+      return "0 min added";
+    }
+
+    return `+${formatDuration(sessionMinutesValue)} added`;
+  }
+
+  const numericMinutes = Number(sessionMinutesText);
+  if (Number.isFinite(numericMinutes)) {
+    return getSavedConfirmationDurationCopy(sessionMinutesText, numericMinutes);
+  }
+
+  const trimmedDuration = sessionMinutesText.trim();
+  if (!trimmedDuration || trimmedDuration === "0 min") {
+    return "0 min added";
+  }
+
+  return `+${trimmedDuration} added`;
 }
 
 function getBookMetadataFields(
@@ -540,6 +599,26 @@ function getSanitizedBookMetadataFields(
   };
 }
 
+function sanitizeStoredBookMetadata(
+  value: unknown,
+  fallbackSource: BookMetadata["source"] = "manual",
+): BookMetadata | null {
+  if (!isRecord(value)) return null;
+
+  const title = coerceString(value.title).trim();
+  if (!title) return null;
+
+  return {
+    title,
+    author: coerceAuthor(value.author),
+    coverUrl: normalizeStoredCoverUrl(coerceNullableString(value.coverUrl)),
+    googleBooksId: coerceNullableString(value.googleBooksId),
+    isbn10: coerceNullableString(value.isbn10),
+    isbn13: coerceNullableString(value.isbn13),
+    source: coerceBookSource(value.source ?? value.bookSource) ?? fallbackSource,
+  };
+}
+
 function sanitizeReadingSession(
   value: unknown,
   index: number,
@@ -645,31 +724,10 @@ function sanitizePendingPostSessionDraft(
   const rawAttributionStep = coerceString(value.bookAttributionStep);
   const bookAttributionStep: BookAttributionStep =
     rawAttributionStep === "reflect" ? "reflect" : "choose";
-  const rawSelectedBookMetadata = isRecord(value.selectedBookMetadata)
-    ? value.selectedBookMetadata
-    : null;
-  const selectedBookMetadataTitle = coerceString(
-    rawSelectedBookMetadata?.title,
-  ).trim();
-  const selectedBookMetadata = selectedBookMetadataTitle
-    ? ({
-        title: selectedBookMetadataTitle,
-        author: coerceAuthor(rawSelectedBookMetadata?.author),
-        coverUrl: normalizeStoredCoverUrl(
-          coerceNullableString(rawSelectedBookMetadata?.coverUrl),
-        ),
-        googleBooksId: coerceNullableString(
-          rawSelectedBookMetadata?.googleBooksId,
-        ),
-        isbn10: coerceNullableString(rawSelectedBookMetadata?.isbn10),
-        isbn13: coerceNullableString(rawSelectedBookMetadata?.isbn13),
-        source:
-          coerceBookSource(
-            rawSelectedBookMetadata?.source ??
-              rawSelectedBookMetadata?.bookSource,
-          ) ?? "googleBooks",
-      } satisfies BookMetadata)
-    : null;
+  const selectedBookMetadata = sanitizeStoredBookMetadata(
+    value.selectedBookMetadata,
+    "googleBooks",
+  );
 
   return {
     version: 1,
@@ -678,6 +736,7 @@ function sanitizePendingPostSessionDraft(
     endedAt,
     bookTitle: coerceString(value.bookTitle),
     bookAttributionStep,
+    startedWithSelectedBook: value.startedWithSelectedBook === true,
     completedBookReview: coerceString(value.completedBookReview),
     showBookCompletedInput: value.showBookCompletedInput === true,
     selectedBookMetadata,
@@ -757,8 +816,10 @@ function parseCompletedBooks(rawValue: string) {
   }
 }
 
-function normalizeBookIdentityText(value?: string | null) {
-  return value?.trim().toLowerCase().replace(/\s+/g, " ") ?? "";
+function normalizeBookIdentityText(value?: unknown) {
+  return typeof value === "string"
+    ? value.trim().toLowerCase().replace(/\s+/g, " ")
+    : "";
 }
 
 function getDisplayableAuthor(value?: string | null) {
@@ -774,8 +835,59 @@ function getDisplayableAuthor(value?: string | null) {
   return author;
 }
 
-function normalizeBookIdentifier(value?: string | null) {
-  return value?.trim().toUpperCase().replace(/[^0-9X]/g, "") ?? "";
+function normalizeBookIdentifier(value?: unknown) {
+  return typeof value === "string"
+    ? value.trim().toUpperCase().replace(/[^0-9X]/g, "")
+    : "";
+}
+
+function getBookDeduplicationKey(book: {
+  id?: unknown;
+  title?: unknown;
+  author?: unknown;
+  authors?: unknown;
+  googleBooksId?: unknown;
+}) {
+  const googleBooksId =
+    typeof book.googleBooksId === "string" ? book.googleBooksId.trim() : "";
+  if (googleBooksId) return `google:${googleBooksId}`;
+
+  const id = typeof book.id === "string" ? book.id.trim() : "";
+  if (id) return `id:${id}`;
+
+  const title = normalizeBookIdentityText(book.title);
+  const author =
+    normalizeBookIdentityText(book.author) ||
+    (Array.isArray(book.authors)
+      ? normalizeBookIdentityText(
+          book.authors
+            .filter((author) => typeof author === "string")
+            .join(", "),
+        )
+      : "");
+
+  if (title && author) return `title-author:${title}:${author}`;
+  if (title) return `title:${title}`;
+  return "";
+}
+
+function dedupeBooksByIdentity<T extends {
+  id?: unknown;
+  title?: unknown;
+  author?: unknown;
+  authors?: unknown;
+  googleBooksId?: unknown;
+}>(books: T[]) {
+  const seenKeys = new Set<string>();
+
+  return books.filter((book) => {
+    const key = getBookDeduplicationKey(book);
+    if (!key) return false;
+    if (seenKeys.has(key)) return false;
+
+    seenKeys.add(key);
+    return true;
+  });
 }
 
 function hasReusableBookMetadata(book: BookMetadataFields) {
@@ -903,6 +1015,10 @@ export default function HomeScreen() {
     null,
   );
   const [pendingSessionSeconds, setPendingSessionSeconds] = useState(0);
+  const [
+    pendingSessionStartedWithSelectedBook,
+    setPendingSessionStartedWithSelectedBook,
+  ] = useState(false);
   const [screen, setScreen] = useState<Screen>("loading");
   const [libraryReturnTarget, setLibraryReturnTarget] =
     useState<LibraryReturnTarget>("home");
@@ -945,6 +1061,22 @@ export default function HomeScreen() {
   const [manualBookLookupError, setManualBookLookupError] = useState(false);
   const [recentSessions, setRecentSessions] = useState<ReadingSession[]>([]);
   const [totalCompletedSessions, setTotalCompletedSessions] = useState(0);
+  const [preSessionBook, setPreSessionBook] = useState<BookMetadata | null>(
+    null,
+  );
+  const [activeSessionSelectedBook, setActiveSessionSelectedBook] =
+    useState<BookMetadata | null>(null);
+  const [isPreSessionBookChooserVisible, setIsPreSessionBookChooserVisible] =
+    useState(false);
+  const [preSessionBookQuery, setPreSessionBookQuery] = useState("");
+  const [preSessionBookSearchResults, setPreSessionBookSearchResults] =
+    useState<BookMetadata[]>([]);
+  const [isPreSessionBookSearchLoading, setIsPreSessionBookSearchLoading] =
+    useState(false);
+  const [hasPreSessionBookSearchSearched, setHasPreSessionBookSearchSearched] =
+    useState(false);
+  const [preSessionBookSearchError, setPreSessionBookSearchError] =
+    useState(false);
   const [bookLookupResults, setBookLookupResults] = useState<BookMetadata[]>([]);
   const [selectedBookMetadata, setSelectedBookMetadata] =
     useState<BookMetadata | null>(null);
@@ -987,12 +1119,15 @@ export default function HomeScreen() {
   const revealSceneScale = useRef(new Animated.Value(0.98)).current;
   const bookTitleInputRef = useRef<TextInput | null>(null);
   const bookInputScrollRef = useRef<ScrollView | null>(null);
+  const bookInputScrollYRef = useRef(0);
+  const bookReflectionInputHeightRef = useRef(0);
   const manualLogScrollRef = useRef<ScrollView | null>(null);
   const completedBookScrollRef = useRef<ScrollView | null>(null);
   const completedBookScrollYRef = useRef(0);
   const completedBookReviewInputHeightRef = useRef(0);
   const manualBookTitleInputRef = useRef<TextInput | null>(null);
   const bookLookupRequestId = useRef(0);
+  const preSessionBookLookupRequestId = useRef(0);
   const lastAutoScrolledBookLookupQuery = useRef<string | null>(null);
   const manualBookLookupRequestId = useRef(0);
   const manualBookLookupTimer = useRef<ReturnType<typeof setTimeout> | null>(
@@ -1062,11 +1197,14 @@ export default function HomeScreen() {
       setActiveSessionStartTime(null);
       setPendingPostSessionId(null);
       setPendingSessionSeconds(0);
+      setPendingSessionStartedWithSelectedBook(false);
+      setActiveSessionSelectedBook(null);
       setSessionMessage(null);
       void AsyncStorage.multiRemove([
         ACTIVE_SESSION_START_KEY,
         ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
         ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
+        ACTIVE_SESSION_SELECTED_BOOK_KEY,
       ]);
       setScreen("home");
       return;
@@ -1081,6 +1219,7 @@ export default function HomeScreen() {
       );
       setPendingSessionSeconds(0);
       setPendingPostSessionId(null);
+      setPendingSessionStartedWithSelectedBook(false);
       setShowBookCompletedInput(false);
       setCompletedBookReview("");
       setCompletedBookReviewError(null);
@@ -1157,6 +1296,7 @@ export default function HomeScreen() {
       endedAt: new Date().toISOString(),
       bookTitle,
       bookAttributionStep,
+      startedWithSelectedBook: pendingSessionStartedWithSelectedBook,
       completedBookReview,
       showBookCompletedInput,
       selectedBookMetadata,
@@ -1168,6 +1308,7 @@ export default function HomeScreen() {
     isLoaded,
     pendingPostSessionId,
     pendingSessionSeconds,
+    pendingSessionStartedWithSelectedBook,
     screen,
     selectedBookMetadata,
     showBookCompletedInput,
@@ -1219,6 +1360,65 @@ export default function HomeScreen() {
       clearTimeout(scrollTimer);
     };
   }, [isKeyboardVisible, manualLogNoteFocused, screen]);
+
+  useEffect(() => {
+    const trimmedQuery = preSessionBookQuery.trim();
+
+    if (!isPreSessionBookChooserVisible || trimmedQuery.length < 3) {
+      preSessionBookLookupRequestId.current += 1;
+      setPreSessionBookSearchResults([]);
+      setIsPreSessionBookSearchLoading(false);
+      setHasPreSessionBookSearchSearched(false);
+      setPreSessionBookSearchError(false);
+      return;
+    }
+
+    const requestId = preSessionBookLookupRequestId.current + 1;
+    preSessionBookLookupRequestId.current = requestId;
+    setPreSessionBookSearchResults([]);
+    setIsPreSessionBookSearchLoading(true);
+    setHasPreSessionBookSearchSearched(false);
+    setPreSessionBookSearchError(false);
+
+    const lookupTimer = setTimeout(async () => {
+      try {
+        const results = await Promise.race<BookMetadata[]>([
+          searchGoogleBooks(trimmedQuery),
+          new Promise<BookMetadata[]>((_, reject) =>
+            setTimeout(
+              () => reject(new Error("Book lookup timed out")),
+              BOOK_LOOKUP_TIMEOUT_MS,
+            ),
+          ),
+        ]);
+
+        if (preSessionBookLookupRequestId.current !== requestId) {
+          return;
+        }
+
+        setPreSessionBookSearchResults(results);
+        setHasPreSessionBookSearchSearched(true);
+        setPreSessionBookSearchError(false);
+      } catch (error) {
+        if (preSessionBookLookupRequestId.current !== requestId) {
+          return;
+        }
+
+        warnInDev("Rousd pre-session Google Books lookup could not finish", error);
+        setPreSessionBookSearchResults([]);
+        setHasPreSessionBookSearchSearched(true);
+        setPreSessionBookSearchError(true);
+      } finally {
+        if (preSessionBookLookupRequestId.current === requestId) {
+          setIsPreSessionBookSearchLoading(false);
+        }
+      }
+    }, 450);
+
+    return () => {
+      clearTimeout(lookupTimer);
+    };
+  }, [isPreSessionBookChooserVisible, preSessionBookQuery]);
 
   useEffect(() => {
     if (screen !== "bookInput") {
@@ -1508,7 +1708,9 @@ export default function HomeScreen() {
 
     animation.start(({ finished }) => {
       if (finished) {
-        setBookAttributionStep("choose");
+        setBookAttributionStep(
+          pendingSessionStartedWithSelectedBook ? "reflect" : "choose",
+        );
         setScreen("bookInput");
       }
     });
@@ -1520,6 +1722,7 @@ export default function HomeScreen() {
     closeTransitionOpacity,
     closeTransitionScale,
     closeTransitionTranslateY,
+    pendingSessionStartedWithSelectedBook,
     screen,
   ]);
 
@@ -1652,6 +1855,9 @@ export default function HomeScreen() {
         );
         const savedActiveSessionLifetimeStartSeconds =
           await AsyncStorage.getItem(ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY);
+        const savedActiveSessionSelectedBook = await AsyncStorage.getItem(
+          ACTIVE_SESSION_SELECTED_BOOK_KEY,
+        );
         const savedPendingPostSessionDraft = await AsyncStorage.getItem(
           PENDING_POST_SESSION_DRAFT_KEY,
         );
@@ -1769,6 +1975,23 @@ export default function HomeScreen() {
             setSessionStartSeconds(restoredTodayStartSeconds);
             setLifetimeSessionStartSeconds(restoredLifetimeStartSeconds);
             setActiveSessionStartTime(restoredStartTime);
+            if (savedActiveSessionSelectedBook) {
+              try {
+                const restoredActiveSessionBook = sanitizeStoredBookMetadata(
+                  JSON.parse(savedActiveSessionSelectedBook),
+                );
+                setActiveSessionSelectedBook(restoredActiveSessionBook);
+                if (restoredActiveSessionBook) {
+                  setPreSessionBook(restoredActiveSessionBook);
+                }
+              } catch (error) {
+                warnInDev(
+                  "Rousd ignored malformed active-session book data.",
+                  error,
+                );
+                await AsyncStorage.removeItem(ACTIVE_SESSION_SELECTED_BOOK_KEY);
+              }
+            }
             setSeconds(restoredTodayStartSeconds + elapsed);
             setLifetimeSeconds(restoredLifetimeStartSeconds + elapsed);
             setIsReading(true);
@@ -1782,6 +2005,7 @@ export default function HomeScreen() {
               ACTIVE_SESSION_START_KEY,
               ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
               ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
+              ACTIVE_SESSION_SELECTED_BOOK_KEY,
             ]);
           }
         }
@@ -1802,6 +2026,9 @@ export default function HomeScreen() {
             } else {
               setPendingPostSessionId(pendingDraft.sessionId);
               setPendingSessionSeconds(pendingDraft.sessionSeconds);
+              setPendingSessionStartedWithSelectedBook(
+                pendingDraft.startedWithSelectedBook === true,
+              );
               setBookTitle(pendingDraft.bookTitle ?? savedCurrentBook ?? "");
               setBookAttributionStep(
                 pendingDraft.bookAttributionStep ?? "choose",
@@ -1827,9 +2054,24 @@ export default function HomeScreen() {
 
         if (
           savedCurrentBook !== null &&
+          !didRestoreActiveSession &&
           !isUnattachedSessionTitle(savedCurrentBook)
         ) {
           setCurrentBookTitle(savedCurrentBook);
+          const savedCurrentBookSession = loadedRecentSessions.find(
+            (session) =>
+              session.title.trim().toLowerCase() ===
+              savedCurrentBook.trim().toLowerCase(),
+          );
+          setPreSessionBook({
+            title: savedCurrentBook,
+            author: savedCurrentBookSession?.author ?? null,
+            coverUrl: normalizeStoredCoverUrl(savedCurrentBookSession?.coverUrl),
+            googleBooksId: savedCurrentBookSession?.googleBooksId ?? null,
+            isbn10: savedCurrentBookSession?.isbn10 ?? null,
+            isbn13: savedCurrentBookSession?.isbn13 ?? null,
+            source: savedCurrentBookSession?.bookSource ?? "manual",
+          });
           if (nextScreen !== "bookInput") {
             setBookTitle(savedCurrentBook);
           }
@@ -1940,17 +2182,29 @@ export default function HomeScreen() {
       await persistTodayDateIfNeeded();
 
       const now = Date.now();
+      const validPreSessionBookTitle = getValidBookTitle(preSessionBook?.title);
+      const selectedBookAtStart = validPreSessionBookTitle && preSessionBook
+        ? {
+            ...preSessionBook,
+            title: validPreSessionBookTitle,
+            coverUrl: normalizeStoredCoverUrl(preSessionBook.coverUrl),
+            source: preSessionBook.source ?? "manual",
+          }
+        : null;
 
       setSessionStartSeconds(seconds);
       setLifetimeSessionStartSeconds(lifetimeSeconds);
       setActiveSessionStartTime(now);
       setPendingPostSessionId(null);
       setPendingSessionSeconds(0);
+      setPendingSessionStartedWithSelectedBook(false);
+      setActiveSessionSelectedBook(selectedBookAtStart);
       setSessionMessage(null);
       setSanctuaryReveal(null);
       setCompletedBookMoment(null);
       setSessionReflection("");
-      setBookTitle(currentBookTitle);
+      setBookTitle(selectedBookAtStart?.title ?? "");
+      setSelectedBookMetadata(selectedBookAtStart);
       setHasUserEditedBookQuery(false);
       setShowBookCompletedInput(false);
       setCompletedBookReview("");
@@ -1972,10 +2226,14 @@ export default function HomeScreen() {
         [ACTIVE_SESSION_START_KEY, String(now)],
         [ACTIVE_SESSION_TODAY_START_SECONDS_KEY, String(seconds)],
         [ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY, String(lifetimeSeconds)],
+        [
+          ACTIVE_SESSION_SELECTED_BOOK_KEY,
+          selectedBookAtStart ? JSON.stringify(selectedBookAtStart) : "",
+        ],
       ]);
 
       captureAnalyticsEvent("reading_session_started", {
-        has_current_book: Boolean(getValidBookTitle(currentBookTitle)),
+        has_current_book: Boolean(selectedBookAtStart),
       });
     } else if (activeSessionStartTime) {
       isEndingSessionRef.current = true;
@@ -1987,16 +2245,23 @@ export default function HomeScreen() {
         lifetimeSessionStartSeconds + sessionSeconds;
       const sessionDuration = formatDuration(sessionSeconds / 60);
       const sessionId = Date.now().toString();
+      const selectedBookFromStart = getValidBookTitle(
+        activeSessionSelectedBook?.title,
+      )
+        ? activeSessionSelectedBook
+        : null;
+      const startedWithSelectedBook = Boolean(selectedBookFromStart);
       const pendingDraft: PendingPostSessionDraft = {
         version: 1,
         sessionId,
         sessionSeconds,
         endedAt: new Date().toISOString(),
-        bookTitle: currentBookTitle,
-        bookAttributionStep: "choose",
+        bookTitle: selectedBookFromStart?.title ?? "",
+        bookAttributionStep: startedWithSelectedBook ? "reflect" : "choose",
+        startedWithSelectedBook,
         completedBookReview: "",
         showBookCompletedInput: false,
-        selectedBookMetadata: null,
+        selectedBookMetadata: selectedBookFromStart,
       };
 
       try {
@@ -2009,6 +2274,7 @@ export default function HomeScreen() {
           ACTIVE_SESSION_START_KEY,
           ACTIVE_SESSION_TODAY_START_SECONDS_KEY,
           ACTIVE_SESSION_LIFETIME_START_SECONDS_KEY,
+          ACTIVE_SESSION_SELECTED_BOOK_KEY,
         ]);
 
         captureAnalyticsEvent("reading_session_ended", {
@@ -2026,13 +2292,15 @@ export default function HomeScreen() {
         setLifetimeSeconds(updatedLifetimeSeconds);
         setPendingPostSessionId(sessionId);
         setPendingSessionSeconds(sessionSeconds);
-        setBookTitle(currentBookTitle);
-        setSelectedBookMetadata(null);
+        setPendingSessionStartedWithSelectedBook(startedWithSelectedBook);
+        setBookTitle(selectedBookFromStart?.title ?? "");
+        setSelectedBookMetadata(selectedBookFromStart);
         setHasUserEditedBookQuery(false);
         setIsBookLookupRequested(false);
         setSessionMessage(`+${sessionDuration} added`);
         setIsReading(false);
         setActiveSessionStartTime(null);
+        setActiveSessionSelectedBook(null);
         isEndingSessionRef.current = false;
         setIsExitingReading(false);
         setScreen("closeTransition");
@@ -2244,6 +2512,40 @@ export default function HomeScreen() {
     };
   };
 
+  const resetPreSessionBookSearch = () => {
+    preSessionBookLookupRequestId.current += 1;
+    setPreSessionBookQuery("");
+    setPreSessionBookSearchResults([]);
+    setIsPreSessionBookSearchLoading(false);
+    setHasPreSessionBookSearchSearched(false);
+    setPreSessionBookSearchError(false);
+  };
+
+  const closePreSessionBookChooser = () => {
+    Keyboard.dismiss();
+    setIsPreSessionBookChooserVisible(false);
+    resetPreSessionBookSearch();
+  };
+
+  const selectPreSessionBook = (book: BookMetadata) => {
+    void Haptics.selectionAsync();
+    Keyboard.dismiss();
+    setPreSessionBook({
+      ...book,
+      coverUrl: normalizeStoredCoverUrl(book.coverUrl),
+    });
+    setIsPreSessionBookChooserVisible(false);
+    resetPreSessionBookSearch();
+  };
+
+  const clearPreSessionBook = () => {
+    void Haptics.selectionAsync();
+    Keyboard.dismiss();
+    setPreSessionBook(null);
+    setIsPreSessionBookChooserVisible(false);
+    resetPreSessionBookSearch();
+  };
+
   const saveSession = async (
     title: string,
     bookMetadata?: BookMetadata | null,
@@ -2408,6 +2710,12 @@ export default function HomeScreen() {
 
       if (validBookTitle) {
         setCurrentBookTitle(validBookTitle);
+        setPreSessionBook(
+          selectedMetadata ?? {
+            title: validBookTitle,
+            source: "manual",
+          },
+        );
         await AsyncStorage.setItem(CURRENT_BOOK_KEY, validBookTitle);
       }
 
@@ -2422,6 +2730,8 @@ export default function HomeScreen() {
         setCompletedBookReview("");
       }
       setBookAttributionStep("choose");
+      setPendingSessionSeconds(0);
+      setPendingSessionStartedWithSelectedBook(false);
       setSelectedBookMetadata(null);
       setHasUserEditedBookQuery(false);
       setBookLookupResults([]);
@@ -2462,6 +2772,8 @@ export default function HomeScreen() {
       setSessionMessage(`+${formatDuration(Number(savedSession.sessionMinutes))} added`);
       setShowBookCompletedInput(false);
       setBookAttributionStep("choose");
+      setPendingSessionSeconds(0);
+      setPendingSessionStartedWithSelectedBook(false);
       setCompletedBookReview("");
       setSelectedBookMetadata(null);
       setHasUserEditedBookQuery(false);
@@ -2843,6 +3155,12 @@ export default function HomeScreen() {
 
     if (trimmedTitle) {
       setCurrentBookTitle(trimmedTitle);
+      setPreSessionBook(
+        selectedManualMetadata ?? {
+          title: trimmedTitle,
+          source: "manual",
+        },
+      );
     }
 
     setScreen("reveal");
@@ -2906,6 +3224,8 @@ export default function HomeScreen() {
     }
 
     setScreen("home");
+    setPendingSessionSeconds(0);
+    setPendingSessionStartedWithSelectedBook(false);
     setSessionReflection("");
     setSessionReflectionError(null);
     setSanctuaryReveal(null);
@@ -2918,8 +3238,9 @@ export default function HomeScreen() {
   };
 
   const visibleSessions = recentSessions.slice(0, 3);
-  const visiblePickerSessions = recentSessions
-    .filter((session) => !isUnattachedSessionTitle(session.title))
+  const visiblePickerSessions = dedupeBooksByIdentity(
+    recentSessions.filter((session) => !isUnattachedSessionTitle(session.title)),
+  )
     .slice(0, 3);
   const latestSession = recentSessions[0];
   const currentBookSession = currentBookTitle
@@ -2929,19 +3250,6 @@ export default function HomeScreen() {
           currentBookTitle.trim().toLowerCase(),
       )
     : latestSession;
-  const currentBookCoverUrl = normalizeStoredCoverUrl(
-    currentBookSession?.coverUrl,
-  );
-  const currentBookDisplayTitle =
-    currentBookTitle ||
-    (latestSession
-      ? getDisplaySessionTitle(latestSession.title)
-      : "A quiet place to begin.");
-  const currentBookAuthor = getDisplayableAuthor(currentBookSession?.author);
-  const shouldShowCurrentBookPlaceholderMark =
-    !currentBookTitle &&
-    (!latestSession || isUnattachedSessionTitle(latestSession.title));
-  const shouldShowHomeBlankLeaf = shouldShowCurrentBookPlaceholderMark;
   const currentBookLastSession = currentBookTitle ? currentBookSession : null;
   const currentBookLastSessionNote = currentBookLastSession
     ? getSessionNote(currentBookLastSession)
@@ -2950,6 +3258,69 @@ export default function HomeScreen() {
     currentBookLastSession && currentBookLastSessionNote.length > 0
       ? currentBookLastSession
       : null;
+  const preSessionBookChoicesByIdentity = new Map<string, BookMetadata>();
+  const addPreSessionBookChoice = (book?: BookMetadata | null) => {
+    const title = getValidBookTitle(book?.title);
+    if (!title) return;
+
+    const identityKey = getBookDeduplicationKey({ ...book, title });
+    if (!identityKey || preSessionBookChoicesByIdentity.has(identityKey)) return;
+
+    preSessionBookChoicesByIdentity.set(identityKey, {
+      ...book,
+      title,
+      coverUrl: normalizeStoredCoverUrl(book?.coverUrl),
+      source: book?.source ?? "manual",
+    });
+  };
+
+  addPreSessionBookChoice(preSessionBook);
+  if (currentBookTitle) {
+    addPreSessionBookChoice(
+      findKnownBookMetadataByTitle(currentBookTitle) ?? {
+        title: currentBookTitle,
+        source: "manual",
+      },
+    );
+  }
+  recentSessions
+    .filter((session) => !isUnattachedSessionTitle(session.title))
+    .forEach((session) => {
+      addPreSessionBookChoice({
+        title: session.title,
+        author: session.author ?? null,
+        coverUrl: normalizeStoredCoverUrl(session.coverUrl),
+        googleBooksId: session.googleBooksId ?? null,
+        isbn10: session.isbn10 ?? null,
+        isbn13: session.isbn13 ?? null,
+        source: session.bookSource ?? "manual",
+      });
+    });
+
+  const preSessionBookChoices = Array.from(
+    preSessionBookChoicesByIdentity.values(),
+  ).slice(0, 5);
+  const preSessionBookTitle = getValidBookTitle(preSessionBook?.title);
+  const preSessionBookAuthor = getDisplayableAuthor(preSessionBook?.author);
+  const preSessionBookCoverUrl = normalizeStoredCoverUrl(
+    preSessionBook?.coverUrl,
+  );
+  const preSessionReadingTitle =
+    getHomeBookplateDisplayTitle(preSessionBookTitle);
+  const shouldUseCompactPreSessionTitle =
+    preSessionReadingTitle.length > 44;
+  const preSessionReadingHelper = preSessionBookTitle
+    ? preSessionBookAuthor
+      ? `by ${preSessionBookAuthor}`
+      : "Tap to change before you begin."
+    : "You can add the book after your session.";
+  const trimmedPreSessionBookQuery = preSessionBookQuery.trim();
+  const isSearchingPreSessionBooks = trimmedPreSessionBookQuery.length > 0;
+  const shouldShowPreSessionBookSearchResults =
+    trimmedPreSessionBookQuery.length >= 3 &&
+    (isPreSessionBookSearchLoading ||
+      hasPreSessionBookSearchSearched ||
+      preSessionBookSearchResults.length > 0);
   const revealBookTitle = getDisplaySessionTitle(
     sanctuaryReveal?.bookTitle ||
       bookTitle.trim() ||
@@ -3236,6 +3607,11 @@ export default function HomeScreen() {
         canCompleteBook || selectedBookMetadata || knownBookMetadata,
       );
       const isChoosingBook = !isReflectingBookStep || !hasAttributionBook;
+      const hasPreselectedBookForAttribution = Boolean(
+        isChoosingBook && selectedBookMetadata && !hasUserEditedBookQuery,
+      );
+      const shouldShowBypassedBookChange =
+        !isChoosingBook && pendingSessionStartedWithSelectedBook;
       const isSearchingForBook =
         isChoosingBook &&
         bookTitleFocused &&
@@ -3247,6 +3623,13 @@ export default function HomeScreen() {
         hasUserEditedBookQuery &&
         bookLookupQueryIsReady &&
         (isBookLookupLoading || hasBookLookupSearched || bookLookupResults.length > 0);
+      const shouldShowBookLookupEmptyState =
+        shouldShowBookLookup &&
+        !isBookLookupLoading &&
+        hasBookLookupSearched &&
+        bookLookupResults.length === 0 &&
+        bookLookupQueryIsReady &&
+        bookTitle.trim().length > 0;
       const isSavingAttributionBook = savingAction === "bookInput";
       const isSavingAttributionSkip = savingAction === "bookInputSkip";
       const isSavingAttribution =
@@ -3258,7 +3641,41 @@ export default function HomeScreen() {
       const attributionKeyboardBottomPadding =
         insets.bottom + (isKeyboardVisible ? 320 : 112);
       const shouldShowBookChoiceShortcuts =
-        isChoosingBook && !isSearchingForBook;
+        isChoosingBook && !isSearchingForBook && !selectedBookMetadata;
+      const beginBookAttributionSearch = () => {
+        Keyboard.dismiss();
+        bookLookupRequestId.current += 1;
+        setBookInputError(null);
+        setSelectedBookMetadata(null);
+        setBookTitle("");
+        setHasUserEditedBookQuery(true);
+        setIsBookLookupRequested(true);
+        setBookLookupResults([]);
+        setIsBookLookupLoading(false);
+        setHasBookLookupSearched(false);
+        setBookLookupError(false);
+        setTimeout(() => bookTitleInputRef.current?.focus(), 80);
+      };
+      const changePreselectedBook = beginBookAttributionSearch;
+      const changeBookFromReflection = () => {
+        setBookAttributionStep("choose");
+        beginBookAttributionSearch();
+        setTimeout(() => {
+          bookInputScrollRef.current?.scrollTo({ y: 0, animated: true });
+        }, 80);
+      };
+      const keepReflectionInputVisible = (scrollDelta = 96) => {
+        if (isChoosingBook) return;
+
+        setTimeout(() => {
+          requestAnimationFrame(() => {
+            bookInputScrollRef.current?.scrollTo({
+              y: bookInputScrollYRef.current + scrollDelta,
+              animated: true,
+            });
+          });
+        }, isKeyboardVisible ? 80 : 260);
+      };
       const continueToAttributionReflection = () => {
         if (!hasAttributionBook) return;
 
@@ -3291,6 +3708,57 @@ export default function HomeScreen() {
           : !isChoosingBook && hasAttributionBook
             ? "Skip note"
             : "Not this time";
+      const attributionActions = (
+        <View
+          style={[
+            styles.closeButtonRow,
+            styles.bookAttributionBottomActions,
+            isChoosingBook && styles.bookAttributionBottomActionsStepOne,
+            isChoosingBook && isKeyboardVisible &&
+              styles.bookAttributionBottomActionsKeyboard,
+            isChoosingBook && !isKeyboardVisible && {
+              paddingBottom: Math.max(insets.bottom, 16) + 16,
+            },
+            !isChoosingBook && styles.bookAttributionBottomActionsFinal,
+          ]}
+        >
+          <Pressable
+            style={({ pressed }) => [
+              styles.bookReturnSecondaryButton,
+              !isChoosingBook && styles.bookReturnSecondaryButtonFinal,
+              isSavingAttribution && { opacity: 0.72 },
+              pressed && styles.buttonPressed,
+            ]}
+            disabled={isSavingAttribution}
+            onPress={handleAttributionSecondaryPress}
+          >
+            <ThemedText style={styles.bookReturnSecondaryButtonText}>
+              {attributionSecondaryLabel}
+            </ThemedText>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.bookReturnSaveButton,
+              !isChoosingBook && styles.bookReturnSaveButtonFinal,
+              !hasAttributionBook && styles.bookReturnSaveButtonDisabled,
+              isSavingAttribution && { opacity: 0.72 },
+              pressed && hasAttributionBook && styles.buttonPressed,
+            ]}
+            disabled={!hasAttributionBook || isSavingAttribution}
+            onPress={handleAttributionPrimaryPress}
+          >
+            <ThemedText
+              style={[
+                styles.bookReturnSaveButtonText,
+                !hasAttributionBook &&
+                  styles.bookReturnSaveButtonTextDisabled,
+              ]}
+            >
+              {attributionPrimaryLabel}
+            </ThemedText>
+          </Pressable>
+        </View>
+      );
 
       return (
       <ThemedView
@@ -3304,39 +3772,53 @@ export default function HomeScreen() {
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={{ flex: 1 }}
         >
+        <View style={styles.bookInputLayout}>
         <ScrollView
           ref={bookInputScrollRef}
+          style={styles.bookInputScroll}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
-          automaticallyAdjustKeyboardInsets
-          contentInset={{ bottom: isKeyboardVisible ? 220 : 0 }}
-          scrollIndicatorInsets={{ bottom: isKeyboardVisible ? 220 : 0 }}
+          automaticallyAdjustKeyboardInsets={Platform.OS === "ios"}
+          onScroll={(event) => {
+            bookInputScrollYRef.current = event.nativeEvent.contentOffset.y;
+          }}
+          scrollEventThrottle={16}
+          contentInset={{ bottom: isChoosingBook && isKeyboardVisible ? 220 : 0 }}
+          scrollIndicatorInsets={{
+            bottom: isChoosingBook && isKeyboardVisible ? 220 : 0,
+          }}
           contentContainerStyle={[
             styles.bookReturnContent,
             shouldUseTallAttributionLayout && styles.bookReturnContentTall,
             isChoosingBook && shouldUseTallAttributionLayout &&
               styles.bookReturnContentStepOneTall,
-            { paddingBottom: attributionKeyboardBottomPadding },
+            isChoosingBook
+              ? { paddingBottom: attributionKeyboardBottomPadding }
+              : styles.bookReturnContentReflection,
           ]}
         >
           {!isChoosingBook ? (
             <View style={styles.bookAttributionTopNav}>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Back to choose book"
-                hitSlop={10}
-                style={({ pressed }) => [
-                  styles.bookAttributionBackButton,
-                  pressed && styles.buttonPressed,
-                ]}
-                onPress={() => setBookAttributionStep("choose")}
-              >
-                <Ionicons
-                  name="chevron-back"
-                  size={20}
-                  color="rgba(47,93,80,0.72)"
-                />
-              </Pressable>
+              {!shouldShowBypassedBookChange ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Back to choose book"
+                  hitSlop={10}
+                  style={({ pressed }) => [
+                    styles.bookAttributionBackButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={() => setBookAttributionStep("choose")}
+                >
+                  <Ionicons
+                    name="chevron-back"
+                    size={20}
+                    color="rgba(47,93,80,0.72)"
+                  />
+                </Pressable>
+              ) : (
+                <View style={styles.bookAttributionBackButtonSpacer} />
+              )}
               <Pressable
                 accessibilityRole="button"
                 style={({ pressed }) => [
@@ -3345,7 +3827,7 @@ export default function HomeScreen() {
                   pressed && styles.buttonPressed,
                 ]}
                 onPress={() => {
-                  setBookAttributionStep("choose");
+                  changeBookFromReflection();
                   setTimeout(() => {
                     bookTitleInputRef.current?.focus();
                   }, 120);
@@ -3367,8 +3849,17 @@ export default function HomeScreen() {
               isSearchingForBook && styles.bookReturnTitleCompact,
             ]}
           >
-            {isChoosingBook ? "What did you read?" : "What stayed with you?"}
+            {isChoosingBook
+              ? hasPreselectedBookForAttribution
+                ? `You read ${attributionPreviewTitle}`
+                : "What did you read?"
+              : "What stayed with you?"}
           </ThemedText>
+          {shouldShowBypassedBookChange ? (
+            <ThemedText style={styles.bookReturnHelperLine}>
+              You spent a quiet moment with {attributionPreviewTitle}.
+            </ThemedText>
+          ) : null}
           {isChoosingBook ? (
             <ThemedText
               style={[
@@ -3376,7 +3867,9 @@ export default function HomeScreen() {
                 isSearchingForBook && styles.bookReturnHelperLineCompact,
               ]}
             >
-              Start by choosing the book you just read.
+              {hasPreselectedBookForAttribution
+                ? "Keep this book, or change it quietly."
+                : "Start by choosing the book you just read."}
             </ThemedText>
           ) : null}
           {isChoosingBook ? (
@@ -3432,12 +3925,28 @@ export default function HomeScreen() {
                   ) : null}
                 </View>
                 {selectedBookMetadata ? (
-                  <ThemedText
-                    style={styles.bookAttributionSelectedText}
-                    numberOfLines={1}
-                  >
-                    Selected from Google Books
-                  </ThemedText>
+                  <>
+                    <ThemedText
+                      style={styles.bookAttributionSelectedText}
+                      numberOfLines={1}
+                    >
+                      Selected from Google Books
+                    </ThemedText>
+                    {hasPreselectedBookForAttribution ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        style={({ pressed }) => [
+                          styles.bookChangeButton,
+                          pressed && styles.buttonPressed,
+                        ]}
+                        onPress={changePreselectedBook}
+                      >
+                        <ThemedText style={styles.bookChangeButtonText}>
+                          Change book
+                        </ThemedText>
+                      </Pressable>
+                    ) : null}
+                  </>
                 ) : knownBookMetadata ? (
                   <ThemedText
                     style={styles.bookAttributionSelectedText}
@@ -3549,9 +4058,7 @@ export default function HomeScreen() {
                     );
                   })}
 
-                  {!isBookLookupLoading &&
-                  hasBookLookupSearched &&
-                  bookLookupResults.length === 0 ? (
+                  {shouldShowBookLookupEmptyState ? (
                     <ThemedText
                       style={[
                         styles.bookLookupEmptyText,
@@ -3695,6 +4202,20 @@ export default function HomeScreen() {
                     <ThemedText style={styles.bookAttributionSelectedText}>
                       {attributionStatusText}
                     </ThemedText>
+                    {shouldShowBypassedBookChange ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        style={({ pressed }) => [
+                          styles.bookChangeButton,
+                          pressed && styles.buttonPressed,
+                        ]}
+                        onPress={changeBookFromReflection}
+                      >
+                        <ThemedText style={styles.bookChangeButtonText}>
+                          Change book
+                        </ThemedText>
+                      </Pressable>
+                    ) : null}
                   </View>
                 </View>
               </View>
@@ -3717,8 +4238,36 @@ export default function HomeScreen() {
                     setCompletedBookReview(text);
                     setBookInputError(null);
                   }}
-                  onFocus={() => setCompletedBookReviewFocused(true)}
+                  onFocus={() => {
+                    setCompletedBookReviewFocused(true);
+                    keepReflectionInputVisible();
+                  }}
                   onBlur={() => setCompletedBookReviewFocused(false)}
+                  onContentSizeChange={(event) => {
+                    const nextHeight = event.nativeEvent.contentSize.height;
+                    const previousHeight =
+                      bookReflectionInputHeightRef.current || nextHeight;
+                    const heightDelta = nextHeight - previousHeight;
+
+                    bookReflectionInputHeightRef.current = nextHeight;
+
+                    if (
+                      isChoosingBook ||
+                      !completedBookReviewFocused ||
+                      !isKeyboardVisible ||
+                      heightDelta <= 1
+                    ) {
+                      return;
+                    }
+
+                    const scrollDelta = Math.min(heightDelta, 36);
+                    requestAnimationFrame(() => {
+                      bookInputScrollRef.current?.scrollTo({
+                        y: bookInputScrollYRef.current + scrollDelta,
+                        animated: true,
+                      });
+                    });
+                  }}
                   style={styles.bookReflectionInput}
                   multiline
                   returnKeyType="done"
@@ -3767,56 +4316,19 @@ export default function HomeScreen() {
             </>
           )}
 
+          {isChoosingBook ? attributionActions : null}
+        </ScrollView>
+        {!isChoosingBook ? (
           <View
             style={[
-              styles.closeButtonRow,
-              styles.bookAttributionBottomActions,
-              isChoosingBook && styles.bookAttributionBottomActionsStepOne,
-              isChoosingBook && isKeyboardVisible &&
-                styles.bookAttributionBottomActionsKeyboard,
-              isChoosingBook && !isKeyboardVisible && {
-                paddingBottom: Math.max(insets.bottom, 16) + 16,
-              },
-              !isChoosingBook && styles.bookAttributionBottomActionsFinal,
+              styles.bookReflectionFooter,
+              { paddingBottom: Math.max(insets.bottom, 16) },
             ]}
           >
-            <Pressable
-              style={({ pressed }) => [
-                styles.bookReturnSecondaryButton,
-                !isChoosingBook && styles.bookReturnSecondaryButtonFinal,
-                isSavingAttribution && { opacity: 0.72 },
-                pressed && styles.buttonPressed,
-              ]}
-              disabled={isSavingAttribution}
-              onPress={handleAttributionSecondaryPress}
-            >
-              <ThemedText style={styles.bookReturnSecondaryButtonText}>
-                {attributionSecondaryLabel}
-              </ThemedText>
-            </Pressable>
-            <Pressable
-              style={({ pressed }) => [
-                styles.bookReturnSaveButton,
-                !isChoosingBook && styles.bookReturnSaveButtonFinal,
-                !hasAttributionBook && styles.bookReturnSaveButtonDisabled,
-                isSavingAttribution && { opacity: 0.72 },
-                pressed && hasAttributionBook && styles.buttonPressed,
-              ]}
-              disabled={!hasAttributionBook || isSavingAttribution}
-              onPress={handleAttributionPrimaryPress}
-            >
-              <ThemedText
-                style={[
-                  styles.bookReturnSaveButtonText,
-                  !hasAttributionBook &&
-                    styles.bookReturnSaveButtonTextDisabled,
-                ]}
-              >
-                {attributionPrimaryLabel}
-              </ThemedText>
-            </Pressable>
+            {attributionActions}
           </View>
-        </ScrollView>
+        ) : null}
+        </View>
         </KeyboardAvoidingView>
         </Animated.View>
       </ThemedView>
@@ -4516,6 +5028,16 @@ export default function HomeScreen() {
       const revealMainCopy = isUnattachedReveal
         ? "This moment has a place now."
         : "This book has a little more history now.";
+      const revealSavedSession = recentSessions.find(
+        (session) => session.id === sanctuaryReveal.sessionId,
+      );
+      const revealSavedSessionMinutes = Number(revealSavedSession?.minutes);
+      const revealDurationCopy = getSavedConfirmationDurationCopy(
+        sanctuaryReveal.sessionMinutes,
+        revealSavedSession && Number.isFinite(revealSavedSessionMinutes)
+          ? revealSavedSessionMinutes
+          : undefined,
+      );
 
       return (
       <ThemedView
@@ -4611,7 +5133,11 @@ export default function HomeScreen() {
                 )}
               </View>
               <View style={styles.bookRevealTextBlock}>
-                <ThemedText style={styles.bookRevealBookTitle} numberOfLines={2}>
+                <ThemedText
+                  style={styles.bookRevealBookTitle}
+                  numberOfLines={3}
+                  ellipsizeMode="tail"
+                >
                   {revealBookTitle}
                 </ThemedText>
                 {sanctuaryReveal.author ? (
@@ -4631,7 +5157,7 @@ export default function HomeScreen() {
                     isUnattachedReveal && styles.bookRevealMetaCompact,
                   ]}
                 >
-                  +{formatDuration(Number(sanctuaryReveal.sessionMinutes))} added
+                  {revealDurationCopy}
                 </ThemedText>
                 {isUnattachedReveal ? (
                   <ThemedText
@@ -5191,6 +5717,7 @@ export default function HomeScreen() {
       );
     case "home":
       return (
+    <>
     <Animated.ScrollView
       style={[styles.screen, { opacity: homeEntryOpacity }]}
       contentContainerStyle={styles.scrollContent}
@@ -5249,56 +5776,67 @@ export default function HomeScreen() {
           </Pressable>
         </ThemedView>
 
-        <View style={styles.bookShrineHero}>
-          <View pointerEvents="none" style={styles.bookShrineWarmGlow} />
-
-          {shouldShowHomeBlankLeaf ? (
-            <View style={styles.homeBlankLeaf}>
-              <ThemedText style={styles.homeBlankLeafText}>
-                Your shelf is clear and waiting.
-              </ThemedText>
-              <ThemedText style={styles.homeBlankLeafSubtext}>
-                When you are ready, settle in and begin reading.
-              </ThemedText>
-            </View>
-          ) : (
-            <View style={styles.bookShrinePanel}>
-              <View style={styles.bookShrineCoverWrap}>
-                <View pointerEvents="none" style={styles.bookShrineCoverGlow} />
-                <View style={styles.bookShrineCover}>
-                  {currentBookCoverUrl ? (
-                    <Image
-                      source={{ uri: currentBookCoverUrl }}
-                      style={styles.bookShrineCoverImage}
-                      resizeMode="cover"
-                    />
-                  ) : (
-                    <ThemedText
-                      style={styles.bookShrineCoverTitle}
-                      numberOfLines={4}
-                      ellipsizeMode="tail"
-                    >
-                      {currentBookDisplayTitle}
-                    </ThemedText>
-                  )}
-                </View>
-              </View>
-
-              <View style={styles.bookShrineCopy}>
-                <ThemedText style={styles.bookShrineBookTitle} numberOfLines={4}>
-                  {currentBookDisplayTitle}
-                </ThemedText>
-                {currentBookAuthor ? (
-                  <ThemedText
-                    style={styles.bookShrineBookAuthor}
-                    numberOfLines={2}
-                  >
-                    by {currentBookAuthor}
+        <View style={styles.homeReadingSelectorWrap}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.preSessionReadingSelector,
+              pressed && styles.buttonPressed,
+            ]}
+            onPress={() => setIsPreSessionBookChooserVisible(true)}
+          >
+            <ThemedText style={styles.preSessionReadingEyebrow}>
+              READING
+            </ThemedText>
+            <View style={styles.preSessionReadingCameoFrame}>
+              <View style={styles.preSessionReadingCameo}>
+                {preSessionBookCoverUrl ? (
+                  <Image
+                    source={{ uri: preSessionBookCoverUrl }}
+                    style={styles.preSessionReadingCameoImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <ThemedText style={styles.preSessionReadingCameoMark}>
+                    R
                   </ThemedText>
-                ) : null}
+                )}
               </View>
             </View>
-          )}
+            <ThemedText
+              style={[
+                styles.preSessionReadingTitle,
+                !preSessionBookTitle && styles.preSessionReadingTitleEmpty,
+                shouldUseCompactPreSessionTitle &&
+                  styles.preSessionReadingTitleLong,
+              ]}
+              numberOfLines={2}
+              adjustsFontSizeToFit
+              minimumFontScale={0.8}
+              ellipsizeMode="tail"
+            >
+              {preSessionReadingTitle}
+            </ThemedText>
+            <ThemedText
+              style={[
+                styles.preSessionReadingHelper,
+                !preSessionBookTitle && styles.preSessionReadingHelperEmpty,
+              ]}
+              numberOfLines={preSessionBookTitle ? 1 : 2}
+              ellipsizeMode="tail"
+            >
+              {preSessionReadingHelper}
+            </ThemedText>
+            <View style={styles.preSessionReadingTapLine}>
+              <ThemedText style={styles.preSessionReadingTapText}>
+                {preSessionBookTitle ? "Tap to change" : "Tap to choose"}
+              </ThemedText>
+              <Ionicons
+                name="chevron-down"
+                size={13}
+                color="rgba(47,93,80,0.46)"
+              />
+            </View>
+          </Pressable>
         </View>
 
         <Pressable
@@ -5421,8 +5959,6 @@ export default function HomeScreen() {
           </ThemedView>
         )}
 
-        <View pointerEvents="none" style={styles.sessionsDivider} />
-
         <View style={styles.sessionsHeaderRow}>
           <ThemedText style={styles.sessionsTitle}>Recent reading</ThemedText>
           {recentSessions.length > 0 ? (
@@ -5514,6 +6050,239 @@ export default function HomeScreen() {
 
       </ThemedView>
     </Animated.ScrollView>
+    <Modal
+      visible={isPreSessionBookChooserVisible}
+      transparent
+      animationType="fade"
+      onRequestClose={closePreSessionBookChooser}
+    >
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.preSessionSheetKeyboardView}
+      >
+        <Pressable
+          style={styles.preSessionSheetBackdrop}
+          onPress={closePreSessionBookChooser}
+        >
+          <Pressable
+            style={styles.preSessionSheet}
+            onPress={(event) => event.stopPropagation()}
+          >
+            <View style={styles.preSessionSheetHandle} />
+            <View style={styles.preSessionSheetHeader}>
+              <View style={styles.preSessionSheetCopy}>
+                <ThemedText style={styles.preSessionSheetTitle}>
+                  What are you reading?
+                </ThemedText>
+                <ThemedText style={styles.preSessionSheetSubcopy}>
+                  Choose now, or add it after your session.
+                </ThemedText>
+              </View>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.preSessionSheetCloseButton,
+                  pressed && styles.buttonPressed,
+                ]}
+                onPress={closePreSessionBookChooser}
+              >
+                <Ionicons
+                  name="close"
+                  size={18}
+                  color="rgba(47,93,80,0.62)"
+                />
+              </Pressable>
+            </View>
+
+            <View style={styles.preSessionSearchBox}>
+              <Ionicons
+                name="search-outline"
+                size={16}
+                color="rgba(47,93,80,0.46)"
+              />
+              <TextInput
+                value={preSessionBookQuery}
+                onChangeText={setPreSessionBookQuery}
+                placeholder="Search for a book"
+                placeholderTextColor="rgba(31,41,51,0.36)"
+                autoCorrect={false}
+                returnKeyType="search"
+                style={styles.preSessionSearchInput}
+              />
+              {preSessionBookQuery.length > 0 ? (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.preSessionSearchClearButton,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={resetPreSessionBookSearch}
+                >
+                  <Ionicons
+                    name="close-circle"
+                    size={16}
+                    color="rgba(47,93,80,0.42)"
+                  />
+                </Pressable>
+              ) : null}
+            </View>
+
+            <ScrollView
+              style={styles.preSessionSheetResultsScroll}
+              contentContainerStyle={styles.preSessionSheetResultsContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <View style={styles.preSessionBookList}>
+                {shouldShowPreSessionBookSearchResults ? (
+                  <>
+                    {isPreSessionBookSearchLoading ? (
+                      <ThemedText style={styles.preSessionSheetEmpty}>
+                        Looking through the shelves...
+                      </ThemedText>
+                    ) : null}
+                    {preSessionBookSearchResults.map((book) => {
+                      const bookAuthor = getDisplayableAuthor(book.author);
+                      const coverUrl = normalizeStoredCoverUrl(book.coverUrl);
+
+                      return (
+                        <Pressable
+                          key={
+                            book.googleBooksId ??
+                            `${book.title.trim().toLowerCase()}-${bookAuthor ?? ""}`
+                          }
+                          style={({ pressed }) => [
+                            styles.preSessionBookChoice,
+                            pressed && styles.buttonPressed,
+                          ]}
+                          onPress={() => selectPreSessionBook(book)}
+                        >
+                          <View style={styles.preSessionBookCover}>
+                            {coverUrl ? (
+                              <Image
+                                source={{ uri: coverUrl }}
+                                style={styles.preSessionBookCoverImage}
+                                resizeMode="cover"
+                              />
+                            ) : (
+                              <ThemedText style={styles.preSessionBookCoverText}>
+                                R
+                              </ThemedText>
+                            )}
+                          </View>
+                          <View style={styles.preSessionBookCopy}>
+                            <ThemedText
+                              style={styles.preSessionBookTitle}
+                              numberOfLines={1}
+                            >
+                              {book.title}
+                            </ThemedText>
+                            {bookAuthor ? (
+                              <ThemedText
+                                style={styles.preSessionBookAuthor}
+                                numberOfLines={1}
+                              >
+                                {bookAuthor}
+                              </ThemedText>
+                            ) : null}
+                          </View>
+                        </Pressable>
+                      );
+                    })}
+                    {!isPreSessionBookSearchLoading &&
+                    hasPreSessionBookSearchSearched &&
+                    preSessionBookSearchResults.length === 0 ? (
+                      <ThemedText style={styles.preSessionSheetEmpty}>
+                        {preSessionBookSearchError
+                          ? "Search is resting for a moment. Try again soon."
+                          : "No books found yet. Try the title and author together."}
+                      </ThemedText>
+                    ) : null}
+                  </>
+                ) : !isSearchingPreSessionBooks &&
+                  preSessionBookChoices.length > 0 ? (
+                  preSessionBookChoices.map((book) => {
+                    const isSelected =
+                      preSessionBookTitle?.toLowerCase() ===
+                      book.title.trim().toLowerCase();
+                    const bookAuthor = getDisplayableAuthor(book.author);
+                    const coverUrl = normalizeStoredCoverUrl(book.coverUrl);
+
+                    return (
+                      <Pressable
+                        key={book.title.trim().toLowerCase()}
+                        style={({ pressed }) => [
+                          styles.preSessionBookChoice,
+                          isSelected && styles.preSessionBookChoiceSelected,
+                          pressed && styles.buttonPressed,
+                        ]}
+                        onPress={() => selectPreSessionBook(book)}
+                      >
+                        <View style={styles.preSessionBookCover}>
+                          {coverUrl ? (
+                            <Image
+                              source={{ uri: coverUrl }}
+                              style={styles.preSessionBookCoverImage}
+                              resizeMode="cover"
+                            />
+                          ) : (
+                            <ThemedText style={styles.preSessionBookCoverText}>
+                              R
+                            </ThemedText>
+                          )}
+                        </View>
+                        <View style={styles.preSessionBookCopy}>
+                          <ThemedText
+                            style={styles.preSessionBookTitle}
+                            numberOfLines={1}
+                          >
+                            {book.title}
+                          </ThemedText>
+                          {bookAuthor ? (
+                            <ThemedText
+                              style={styles.preSessionBookAuthor}
+                              numberOfLines={1}
+                            >
+                              {bookAuthor}
+                            </ThemedText>
+                          ) : null}
+                        </View>
+                        {isSelected ? (
+                          <Ionicons
+                            name="checkmark"
+                            size={18}
+                            color="rgba(47,93,80,0.76)"
+                          />
+                        ) : null}
+                      </Pressable>
+                    );
+                  })
+                ) : !isSearchingPreSessionBooks ? (
+                  <ThemedText style={styles.preSessionSheetEmpty}>
+                    Recent books will appear here after you save a reading moment.
+                  </ThemedText>
+                ) : (
+                  <ThemedText style={styles.preSessionSheetEmpty}>
+                    Type a little more to search.
+                  </ThemedText>
+                )}
+              </View>
+
+              <Pressable
+                style={({ pressed }) => [
+                  styles.preSessionContinueButton,
+                  pressed && styles.buttonPressed,
+                ]}
+                onPress={clearPreSessionBook}
+              >
+                <ThemedText style={styles.preSessionContinueButtonText}>
+                  Continue without choosing
+                </ThemedText>
+              </Pressable>
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </KeyboardAvoidingView>
+    </Modal>
+    </>
       );
   }
 }
@@ -6377,7 +7146,7 @@ const styles = StyleSheet.create({
   },
   startHero: {
     minHeight: 88,
-    marginTop: 4,
+    marginTop: 2,
     backgroundColor: "rgba(221,235,228,0.64)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.16)",
@@ -6419,6 +7188,126 @@ const styles = StyleSheet.create({
     marginTop: 2,
     textAlign: "center",
     flexShrink: 1,
+  },
+  preSessionReadingSelector: {
+    alignItems: "center",
+    alignSelf: "center",
+    backgroundColor: "rgba(255,248,237,0.66)",
+    borderWidth: 1,
+    borderColor: "rgba(92,67,43,0.055)",
+    borderRadius: 22,
+    width: "100%",
+    maxWidth: 342,
+    paddingHorizontal: 24,
+    paddingVertical: 22,
+    shadowColor: "#3A2E2B",
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.03,
+    shadowRadius: 12,
+    elevation: 1,
+    zIndex: 3,
+  },
+  homeReadingSelectorWrap: {
+    backgroundColor: "transparent",
+    marginTop: 20,
+    marginBottom: 10,
+    alignItems: "center",
+    zIndex: 3,
+  },
+  preSessionReadingEyebrow: {
+    ...typography.role.metadata,
+    color: "rgba(47,93,80,0.52)",
+    fontSize: 10,
+    lineHeight: 14,
+    letterSpacing: 1.45,
+    textAlign: "center",
+    marginBottom: 10,
+  },
+  preSessionReadingCameoFrame: {
+    width: 48,
+    height: 68,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 10,
+    backgroundColor: "#EFECE6",
+    borderWidth: 1,
+    borderColor: "rgba(58,46,43,0.08)",
+    shadowColor: "#3A2E2B",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.03,
+    shadowRadius: 8,
+    elevation: 1,
+    marginBottom: 12,
+  },
+  preSessionReadingCameo: {
+    width: 42,
+    height: 60,
+    borderRadius: 7,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    backgroundColor: "rgba(47,93,80,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(58,46,43,0.075)",
+  },
+  preSessionReadingCameoImage: {
+    width: 42,
+    height: 60,
+  },
+  preSessionReadingCameoMark: {
+    ...typography.role.bookTitle,
+    color: "rgba(47,93,80,0.58)",
+    fontSize: 18,
+    lineHeight: 24,
+  },
+  preSessionReadingTitle: {
+    ...typography.role.bookTitle,
+    color: colors.text,
+    fontSize: 25,
+    lineHeight: 31,
+    textAlign: "center",
+    maxWidth: 294,
+  },
+  preSessionReadingTitleEmpty: {
+    color: "rgba(31,41,51,0.74)",
+    fontSize: 23,
+    lineHeight: 29,
+  },
+  preSessionReadingTitleLong: {
+    fontSize: 21,
+    lineHeight: 27,
+    maxWidth: 282,
+  },
+  preSessionReadingHelper: {
+    ...typography.role.metadata,
+    color: "rgba(31,41,51,0.50)",
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 6,
+    textAlign: "center",
+    maxWidth: 276,
+  },
+  preSessionReadingHelperEmpty: {
+    ...typography.role.helper,
+    color: "rgba(31,41,51,0.50)",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  preSessionReadingTapLine: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+    backgroundColor: "transparent",
+    marginTop: 10,
+  },
+  preSessionReadingTapText: {
+    ...typography.role.metadata,
+    color: "rgba(47,93,80,0.58)",
+    fontSize: 11,
+    lineHeight: 16,
+    letterSpacing: 0.3,
+    textAlign: "center",
   },
   lastBookMoment: {
     backgroundColor: "rgba(255,248,237,0.58)",
@@ -6588,6 +7477,180 @@ const styles = StyleSheet.create({
     color: colors.success,
     textAlign: "center",
   },
+  preSessionSheetBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(25,38,32,0.30)",
+  },
+  preSessionSheetKeyboardView: {
+    flex: 1,
+  },
+  preSessionSheet: {
+    backgroundColor: colors.background,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingTop: 10,
+    paddingHorizontal: 24,
+    paddingBottom: 18,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.09)",
+  },
+  preSessionSheetHandle: {
+    alignSelf: "center",
+    width: 42,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(47,93,80,0.18)",
+    marginBottom: 16,
+  },
+  preSessionSheetHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 14,
+    backgroundColor: "transparent",
+    marginBottom: 12,
+  },
+  preSessionSheetCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  preSessionSheetTitle: {
+    ...typography.role.pageTitle,
+    color: colors.text,
+    fontSize: 24,
+    lineHeight: 31,
+  },
+  preSessionSheetSubcopy: {
+    ...typography.role.body,
+    color: "rgba(31,41,51,0.58)",
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 3,
+  },
+  preSessionSheetCloseButton: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    marginTop: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,248,237,0.62)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+  },
+  preSessionSearchBox: {
+    minHeight: 42,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 9,
+    backgroundColor: "transparent",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(47,93,80,0.12)",
+    paddingHorizontal: 2,
+    marginTop: 4,
+    marginBottom: 10,
+  },
+  preSessionSearchInput: {
+    ...typography.role.metadata,
+    flex: 1,
+    minWidth: 0,
+    color: "rgba(31,41,51,0.72)",
+    fontSize: 13,
+    lineHeight: 18,
+    paddingVertical: 9,
+  },
+  preSessionSearchClearButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "transparent",
+  },
+  preSessionBookList: {
+    backgroundColor: "transparent",
+    marginTop: 6,
+  },
+  preSessionSheetResultsScroll: {
+    maxHeight: 296,
+    backgroundColor: "transparent",
+  },
+  preSessionSheetResultsContent: {
+    paddingBottom: 12,
+    backgroundColor: "transparent",
+  },
+  preSessionBookChoice: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    backgroundColor: "transparent",
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(47,93,80,0.055)",
+    paddingVertical: 13,
+  },
+  preSessionBookChoiceSelected: {
+    backgroundColor: "rgba(47,93,80,0.045)",
+    borderRadius: 14,
+    borderBottomColor: "transparent",
+    paddingHorizontal: 9,
+  },
+  preSessionBookCover: {
+    width: 36,
+    height: 50,
+    borderRadius: 6,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    backgroundColor: "rgba(47,93,80,0.12)",
+  },
+  preSessionBookCoverImage: {
+    width: "100%",
+    height: "100%",
+  },
+  preSessionBookCoverText: {
+    ...typography.role.bookTitle,
+    color: colors.accent,
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  preSessionBookCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  preSessionBookTitle: {
+    ...typography.role.metadata,
+    color: colors.text,
+    fontSize: 15,
+    lineHeight: 20,
+  },
+  preSessionBookAuthor: {
+    ...typography.role.metadata,
+    color: "rgba(31,41,51,0.52)",
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 2,
+  },
+  preSessionSheetEmpty: {
+    ...typography.role.body,
+    color: "rgba(31,41,51,0.50)",
+    fontSize: 13,
+    lineHeight: 19,
+    paddingVertical: 14,
+  },
+  preSessionContinueButton: {
+    alignItems: "center",
+    backgroundColor: "transparent",
+    paddingVertical: 14,
+    marginTop: 9,
+  },
+  preSessionContinueButtonText: {
+    ...typography.role.button,
+    color: "rgba(47,93,80,0.66)",
+    fontSize: 14,
+    lineHeight: 20,
+  },
   homeShortcutStack: {
     flexDirection: "row",
     gap: 10,
@@ -6672,18 +7735,12 @@ const styles = StyleSheet.create({
     transform: [{ scale: 0.98 }],
     opacity: 0.9,
   },
-  sessionsDivider: {
-    height: 1,
-    backgroundColor: "rgba(47,93,80,0.10)",
-    marginTop: 24,
-    marginBottom: 6,
-  },
   sessionsHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: "transparent",
-    marginTop: 14,
+    marginTop: 34,
     marginBottom: -2,
     zIndex: 2,
   },
@@ -8344,139 +9401,6 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
 
-  bookShrineHero: {
-    borderRadius: 30,
-    overflow: "hidden",
-    backgroundColor: "rgba(255,248,237,0.82)",
-    borderWidth: 1,
-    borderColor: "rgba(196,148,90,0.16)",
-    paddingTop: 22,
-    paddingHorizontal: 20,
-    paddingBottom: 24,
-    zIndex: 2,
-    shadowColor: "#C4945A",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.105,
-    shadowRadius: 20,
-    elevation: 2,
-  },
-  bookShrineWarmGlow: {
-    position: "absolute",
-    top: 42,
-    left: -56,
-    right: -38,
-    height: 196,
-    borderRadius: 116,
-    backgroundColor: "rgba(255,248,237,0.22)",
-  },
-  bookShrinePanel: {
-    minHeight: 248,
-    flexDirection: "column",
-    alignItems: "center",
-    gap: 18,
-    backgroundColor: "transparent",
-  },
-  bookShrineCoverWrap: {
-    width: 146,
-    height: 198,
-    alignItems: "center",
-    justifyContent: "center",
-    position: "relative",
-    shadowColor: "#C98568",
-    shadowOffset: { width: 0, height: 14 },
-    shadowOpacity: 0.18,
-    shadowRadius: 28,
-    elevation: 5,
-  },
-  bookShrineCoverGlow: {
-    position: "absolute",
-    top: -8,
-    left: -8,
-    right: -8,
-    bottom: -8,
-    borderRadius: 22,
-    backgroundColor: "rgba(247,195,107,0.16)",
-  },
-  bookShrineCover: {
-    width: 146,
-    height: 198,
-    borderRadius: 16,
-    backgroundColor: "#1E3E32",
-    borderWidth: 1,
-    borderColor: "rgba(255,248,237,0.36)",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 9,
-    paddingVertical: 12,
-    overflow: "hidden",
-  },
-  bookShrineCoverImage: {
-    width: 146,
-    height: 198,
-    marginHorizontal: -9,
-    marginVertical: -12,
-  },
-  bookShrineCoverTitle: {
-    ...typography.role.bookTitle,
-    color: "#F7F3EA",
-    width: "100%",
-    fontSize: 18,
-    lineHeight: 23,
-    textAlign: "center",
-  },
-  readingMomentCoverMarkHero: {
-    color: "#FFF8ED",
-    fontSize: 44,
-    lineHeight: 53,
-    fontWeight: "900",
-    textAlign: "center",
-    fontFamily: serifFont,
-  },
-  homeBlankLeaf: {
-    minHeight: 248,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 28,
-    backgroundColor: "transparent",
-  },
-  homeBlankLeafText: {
-    ...typography.role.bookTitle,
-    color: "rgba(47,93,80,0.64)",
-    fontSize: 22,
-    lineHeight: 30,
-    textAlign: "center",
-  },
-  homeBlankLeafSubtext: {
-    ...typography.role.helper,
-    color: "rgba(31,41,51,0.52)",
-    fontSize: 14,
-    lineHeight: 22,
-    marginTop: 10,
-    textAlign: "center",
-  },
-  bookShrineCopy: {
-    width: "100%",
-    minWidth: 0,
-    paddingRight: 0,
-    backgroundColor: "transparent",
-    alignItems: "center",
-  },
-  bookShrineBookTitle: {
-    ...typography.role.bookTitle,
-    color: colors.text,
-    fontSize: 23,
-    lineHeight: 30,
-    textAlign: "center",
-  },
-  bookShrineBookAuthor: {
-    ...typography.role.metadata,
-    color: "rgba(31,41,51,0.54)",
-    fontSize: 13,
-    lineHeight: 18,
-    marginTop: 5,
-    textAlign: "center",
-  },
   beaconMark: {
     width: 38,
     height: 38,
@@ -8536,11 +9460,25 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "transparent",
   },
+  bookInputLayout: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
+  bookInputScroll: {
+    flex: 1,
+    backgroundColor: "transparent",
+  },
   bookReturnContent: {
     flexGrow: 1,
     justifyContent: "center",
     backgroundColor: "transparent",
     paddingVertical: 42,
+  },
+  bookReturnContentReflection: {
+    flexGrow: 1,
+    justifyContent: "flex-start",
+    paddingTop: 18,
+    paddingBottom: 18,
   },
   bookReturnContentTall: {
     justifyContent: "flex-start",
@@ -8569,6 +9507,11 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.48)",
     borderWidth: 1,
     borderColor: "rgba(47,93,80,0.07)",
+  },
+  bookAttributionBackButtonSpacer: {
+    width: 36,
+    height: 36,
+    backgroundColor: "transparent",
   },
   bookReturnEyebrow: {
     ...typography.role.metadata,
@@ -8777,6 +9720,19 @@ const styles = StyleSheet.create({
     color: "rgba(47,93,80,0.72)",
     fontSize: 12,
     lineHeight: 16,
+  },
+  bookChangeButton: {
+    alignSelf: "flex-start",
+    backgroundColor: "transparent",
+    paddingVertical: 6,
+    paddingHorizontal: 0,
+    marginTop: 4,
+  },
+  bookChangeButtonText: {
+    ...typography.role.metadata,
+    color: "rgba(47,93,80,0.58)",
+    fontSize: 12,
+    lineHeight: 17,
   },
   bookReflectionCard: {
     marginTop: 18,
@@ -9166,7 +10122,12 @@ const styles = StyleSheet.create({
   bookAttributionBottomActionsFinal: {
     flexDirection: "column-reverse",
     gap: 10,
-    marginTop: 26,
+    marginTop: 0,
+  },
+  bookReflectionFooter: {
+    backgroundColor: "transparent",
+    paddingTop: 10,
+    paddingHorizontal: 0,
   },
   bookRevealScreen: {
     flex: 1,
