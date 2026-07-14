@@ -411,12 +411,12 @@ function getDisplaySessionTitle(title?: string | null) {
 
 function getHomeBookplateDisplayTitle(title?: string | null) {
   const trimmedTitle = title?.trim().replace(/\s+/g, " ") ?? "";
-  if (!trimmedTitle) return "Choose later";
+  if (!trimmedTitle) return "A book, if you’d like";
   if (trimmedTitle.length <= 52) return trimmedTitle;
 
   const appendEllipsis = (value: string) => {
     const cleanedValue = value.trim().replace(/[.…]+$/u, "");
-    return cleanedValue ? `${cleanedValue}…` : "Choose later";
+    return cleanedValue ? `${cleanedValue}…` : "A book, if you’d like";
   };
 
   const [beforeColon] = trimmedTitle.split(":");
@@ -3313,7 +3313,7 @@ export default function HomeScreen() {
     ? preSessionBookAuthor
       ? `by ${preSessionBookAuthor}`
       : "Tap to change before you begin."
-    : "You can add the book after your session.";
+    : "Choose one now, or add it when you finish.";
   const trimmedPreSessionBookQuery = preSessionBookQuery.trim();
   const isSearchingPreSessionBooks = trimmedPreSessionBookQuery.length > 0;
   const shouldShowPreSessionBookSearchResults =
@@ -3378,18 +3378,19 @@ export default function HomeScreen() {
         <View style={styles.welcomeCard}>
           <ThemedText style={styles.welcomeEyebrow}>Rousd</ThemedText>
           <View style={styles.welcomeTitleBlock}>
-            <ThemedText style={styles.welcomeTitle}>
+            <ThemedText style={styles.welcomeSubtitle}>
               A quiet sanctuary for your reading life.
             </ThemedText>
             <ThemedText style={styles.welcomeBody}>
-              Here, reading is not measured or optimized.
+              Choose a book before you begin, or simply start reading and
+              decide afterward.
             </ThemedText>
             <ThemedText style={styles.welcomeBody}>
-              Your timer stays hidden while you read. When you finish, you can
-              save the time to a book and leave a reflection if you wish.
+              Your timer stays hidden while you read. When you finish, you may
+              save the moment to a book and leave a reflection if you wish.
             </ThemedText>
             <ThemedText style={styles.welcomeBody}>
-              Your reading history stays private, stored on this device.
+              Your reading life stays private on this device.
             </ThemedText>
           </View>
 
@@ -3398,6 +3399,7 @@ export default function HomeScreen() {
               styles.welcomeButton,
               pressed && styles.buttonPressed,
             ]}
+            accessibilityRole="button"
             onPress={dismissWelcomeScreen}
           >
             <ThemedText style={styles.welcomeButtonText}>Begin</ThemedText>
@@ -5776,10 +5778,16 @@ export default function HomeScreen() {
           </Pressable>
         </ThemedView>
 
-        <View style={styles.homeReadingSelectorWrap}>
+        <View
+          style={[
+            styles.homeReadingSelectorWrap,
+            !preSessionBookTitle && styles.homeReadingSelectorWrapEmpty,
+          ]}
+        >
           <Pressable
             style={({ pressed }) => [
               styles.preSessionReadingSelector,
+              !preSessionBookTitle && styles.preSessionReadingSelectorEmpty,
               pressed && styles.buttonPressed,
             ]}
             onPress={() => setIsPreSessionBookChooserVisible(true)}
@@ -5787,7 +5795,12 @@ export default function HomeScreen() {
             <ThemedText style={styles.preSessionReadingEyebrow}>
               READING
             </ThemedText>
-            <View style={styles.preSessionReadingCameoFrame}>
+            <View
+              style={[
+                styles.preSessionReadingCameoFrame,
+                !preSessionBookTitle && styles.preSessionReadingCameoFrameEmpty,
+              ]}
+            >
               <View style={styles.preSessionReadingCameo}>
                 {preSessionBookCoverUrl ? (
                   <Image
@@ -5816,26 +5829,45 @@ export default function HomeScreen() {
             >
               {preSessionReadingTitle}
             </ThemedText>
-            <ThemedText
-              style={[
-                styles.preSessionReadingHelper,
-                !preSessionBookTitle && styles.preSessionReadingHelperEmpty,
-              ]}
-              numberOfLines={preSessionBookTitle ? 1 : 2}
-              ellipsizeMode="tail"
-            >
-              {preSessionReadingHelper}
-            </ThemedText>
-            <View style={styles.preSessionReadingTapLine}>
-              <ThemedText style={styles.preSessionReadingTapText}>
-                {preSessionBookTitle ? "Tap to change" : "Tap to choose"}
-              </ThemedText>
-              <Ionicons
-                name="chevron-down"
-                size={13}
-                color="rgba(47,93,80,0.46)"
-              />
-            </View>
+            {preSessionBookTitle ? (
+              <>
+                <ThemedText
+                  style={styles.preSessionReadingHelper}
+                  numberOfLines={1}
+                  ellipsizeMode="tail"
+                >
+                  {preSessionReadingHelper}
+                </ThemedText>
+                <View style={styles.preSessionReadingTapLine}>
+                  <ThemedText style={styles.preSessionReadingTapText}>
+                    Tap to change
+                  </ThemedText>
+                  <Ionicons
+                    name="chevron-down"
+                    size={13}
+                    color="rgba(47,93,80,0.46)"
+                  />
+                </View>
+              </>
+            ) : (
+              <View style={styles.preSessionReadingHelperRowEmpty}>
+                <ThemedText
+                  style={[
+                    styles.preSessionReadingHelper,
+                    styles.preSessionReadingHelperEmpty,
+                  ]}
+                  numberOfLines={2}
+                  ellipsizeMode="tail"
+                >
+                  {preSessionReadingHelper}
+                </ThemedText>
+                <Ionicons
+                  name="chevron-down"
+                  size={13}
+                  color="rgba(47,93,80,0.42)"
+                />
+              </View>
+            )}
           </Pressable>
         </View>
 
@@ -5862,14 +5894,6 @@ export default function HomeScreen() {
                 minimumFontScale={0.88}
               >
                 Begin reading
-              </ThemedText>
-              <ThemedText
-                style={styles.startHeroHelper}
-                numberOfLines={1}
-                adjustsFontSizeToFit
-                minimumFontScale={0.86}
-              >
-                Select what you read after the session
               </ThemedText>
             </View>
           </View>
@@ -6448,7 +6472,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     justifyContent: "space-between",
     backgroundColor: "transparent",
-    paddingVertical: 72,
+    paddingVertical: 54,
   },
   welcomeGlowTop: {
     position: "absolute",
@@ -6473,9 +6497,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     backgroundColor: "transparent",
-    paddingVertical: 10,
+    paddingVertical: 18,
     borderWidth: 0,
     borderColor: "transparent",
+    minHeight: 488,
   },
   welcomeSanctuaryPreview: {
     height: 126,
@@ -6571,8 +6596,10 @@ const styles = StyleSheet.create({
   welcomeTitleBlock: {
     alignItems: "center",
     backgroundColor: "transparent",
-    gap: 10,
-    marginVertical: 24,
+    gap: 12,
+    marginVertical: 28,
+    maxWidth: 292,
+    paddingHorizontal: 4,
   },
   welcomeTitle: {
     ...typography.role.helper,
@@ -6583,13 +6610,24 @@ const styles = StyleSheet.create({
     marginTop: 0,
     maxWidth: 286,
   },
+  welcomeSubtitle: {
+    ...typography.role.helper,
+    color: "rgba(31,41,51,0.72)",
+    fontSize: 18,
+    lineHeight: 27,
+    textAlign: "center",
+    fontStyle: "italic",
+    marginTop: 0,
+    marginBottom: 12,
+    maxWidth: 286,
+  },
   welcomeBody: {
     ...typography.role.metadata,
-    color: "rgba(31,41,51,0.48)",
+    color: "rgba(31,41,51,0.50)",
     fontSize: 13,
-    lineHeight: 19,
+    lineHeight: 20,
     textAlign: "center",
-    maxWidth: 292,
+    maxWidth: 274,
   },
   welcomeStepsCard: {
     backgroundColor: "rgba(247,243,234,0.78)",
@@ -6628,14 +6666,14 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   welcomeButton: {
-    backgroundColor: "rgba(255,248,237,0.34)",
+    backgroundColor: "rgba(255,248,237,0.22)",
     borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.18)",
+    borderColor: "rgba(47,93,80,0.14)",
     borderRadius: 999,
-    paddingVertical: 14,
-    paddingHorizontal: 28,
+    paddingVertical: 13,
+    paddingHorizontal: 30,
     minHeight: 52,
-    minWidth: 156,
+    minWidth: 148,
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 12,
@@ -7207,12 +7245,18 @@ const styles = StyleSheet.create({
     elevation: 1,
     zIndex: 3,
   },
+  preSessionReadingSelectorEmpty: {
+    paddingVertical: 18,
+  },
   homeReadingSelectorWrap: {
     backgroundColor: "transparent",
     marginTop: 20,
     marginBottom: 10,
     alignItems: "center",
     zIndex: 3,
+  },
+  homeReadingSelectorWrapEmpty: {
+    marginBottom: 4,
   },
   preSessionReadingEyebrow: {
     ...typography.role.metadata,
@@ -7238,6 +7282,9 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 1,
     marginBottom: 12,
+  },
+  preSessionReadingCameoFrameEmpty: {
+    marginBottom: 10,
   },
   preSessionReadingCameo: {
     width: 42,
@@ -7292,6 +7339,15 @@ const styles = StyleSheet.create({
     color: "rgba(31,41,51,0.50)",
     fontSize: 12,
     lineHeight: 18,
+  },
+  preSessionReadingHelperRowEmpty: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    backgroundColor: "transparent",
+    marginTop: 6,
+    maxWidth: 282,
   },
   preSessionReadingTapLine: {
     flexDirection: "row",
