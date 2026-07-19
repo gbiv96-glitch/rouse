@@ -4,13 +4,14 @@ import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import { usePostHog } from "posthog-react-native";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   Alert,
   Animated,
   AppState,
   AppStateStatus,
   Image,
+  findNodeHandle,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
@@ -192,7 +193,7 @@ const sanctuaryStages: SanctuaryStage[] = [
   },
 ];
 
-const readingThresholdTitle = "You may set the phone down now.";
+const readingThresholdTitle = "You may set your phone down now.";
 const readingThresholdBody = "Return when you’re ready.";
 
 const completedBookReflectionPrompts = [
@@ -1091,8 +1092,7 @@ export default function HomeScreen() {
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [bookTitleFocused, setBookTitleFocused] = useState(false);
   const [hasUserEditedBookQuery, setHasUserEditedBookQuery] = useState(false);
-  const [manualBookTitleFocused, setManualBookTitleFocused] = useState(false);
-  const [manualLogNoteFocused, setManualLogNoteFocused] = useState(false);
+  const [manualLogFooterHeight, setManualLogFooterHeight] = useState(0);
   const [completedBookReviewFocused, setCompletedBookReviewFocused] =
     useState(false);
   const [isEnteringReading, setIsEnteringReading] = useState(false);
@@ -1126,6 +1126,7 @@ export default function HomeScreen() {
   const completedBookScrollYRef = useRef(0);
   const completedBookReviewInputHeightRef = useRef(0);
   const manualBookTitleInputRef = useRef<TextInput | null>(null);
+  const manualLogNoteInputRef = useRef<TextInput | null>(null);
   const bookLookupRequestId = useRef(0);
   const preSessionBookLookupRequestId = useRef(0);
   const lastAutoScrolledBookLookupQuery = useRef<string | null>(null);
@@ -1171,8 +1172,6 @@ export default function HomeScreen() {
     });
     const keyboardHideSubscription = Keyboard.addListener("keyboardDidHide", () => {
       setIsKeyboardVisible(false);
-      setManualBookTitleFocused(false);
-      setManualLogNoteFocused(false);
       setCompletedBookReviewFocused(false);
     });
 
@@ -1320,46 +1319,6 @@ export default function HomeScreen() {
       setCompletedBookReview("");
     }
   }, [bookTitle, showBookCompletedInput]);
-
-  useEffect(() => {
-    if (screen !== "manualLog" || !manualBookTitleFocused) return;
-
-    const hasQuery = manualLogBookTitle.trim().length >= 3;
-    const scrollTarget = hasQuery ? 360 : 260;
-    const scrollTimer = setTimeout(() => {
-      manualLogScrollRef.current?.scrollTo({
-        y: scrollTarget,
-        animated: true,
-      });
-    }, isKeyboardVisible ? 80 : 180);
-
-    return () => {
-      clearTimeout(scrollTimer);
-    };
-  }, [
-    hasManualBookLookupSearched,
-    isKeyboardVisible,
-    isManualBookLookupLoading,
-    manualBookLookupResults.length,
-    manualBookTitleFocused,
-    manualLogBookTitle,
-    screen,
-  ]);
-
-  useEffect(() => {
-    if (screen !== "manualLog" || !manualLogNoteFocused) return;
-
-    const scrollTimer = setTimeout(() => {
-      manualLogScrollRef.current?.scrollTo({
-        y: 560,
-        animated: true,
-      });
-    }, isKeyboardVisible ? 80 : 180);
-
-    return () => {
-      clearTimeout(scrollTimer);
-    };
-  }, [isKeyboardVisible, manualLogNoteFocused, screen]);
 
   useEffect(() => {
     const trimmedQuery = preSessionBookQuery.trim();
@@ -2447,6 +2406,27 @@ export default function HomeScreen() {
     }, 450);
   };
 
+  const scrollManualLogInputAboveKeyboard = (
+    inputRef: RefObject<TextInput | null>,
+  ) => {
+    const scrollDelay = isKeyboardVisible ? 80 : 280;
+
+    setTimeout(() => {
+      const inputNode = inputRef.current;
+      const scrollResponder =
+        manualLogScrollRef.current?.getScrollResponder();
+      const inputHandle = inputNode ? findNodeHandle(inputNode) : null;
+
+      if (!scrollResponder || inputHandle == null) return;
+
+      scrollResponder.scrollResponderScrollNativeHandleToKeyboard(
+        inputHandle,
+        28,
+        true,
+      );
+    }, scrollDelay);
+  };
+
   const handleManualBookTitleChange = (nextTitle: string) => {
     const trimmedTitle = nextTitle.trim();
     setIsManualBookLookupRequested(true);
@@ -2481,12 +2461,14 @@ export default function HomeScreen() {
   };
 
   const selectManualGoogleBook = (book: BookMetadata) => {
-    setIsManualBookLookupRequested(true);
     setSelectedManualBookMetadata({
       ...book,
       coverUrl: normalizeStoredCoverUrl(book.coverUrl),
     });
     setManualLogBookTitle(book.title);
+    setIsManualBookLookupRequested(false);
+    resetManualBookLookup();
+    Keyboard.dismiss();
   };
 
   const findKnownBookMetadataByTitle = (title: string): BookMetadata | null => {
@@ -2988,8 +2970,6 @@ export default function HomeScreen() {
     setCompletedBookReviewError(null);
     setSelectedManualBookMetadata(null);
     setIsManualBookLookupRequested(false);
-    setManualBookTitleFocused(false);
-    setManualLogNoteFocused(false);
     resetManualBookLookup();
     setSanctuaryReveal(null);
     setCompletedBookMoment(null);
@@ -3034,8 +3014,6 @@ export default function HomeScreen() {
     setManualLogError(null);
     setSelectedManualBookMetadata(null);
     setIsManualBookLookupRequested(false);
-    setManualBookTitleFocused(false);
-    setManualLogNoteFocused(false);
     resetManualBookLookup();
     setScreen("home");
   };
@@ -3147,7 +3125,6 @@ export default function HomeScreen() {
     setManualLogNote("");
     setSelectedManualBookMetadata(null);
     setIsManualBookLookupRequested(false);
-    setManualBookTitleFocused(false);
     resetManualBookLookup();
     setSessionReflection("");
     setSessionReflectionError(null);
@@ -4349,6 +4326,11 @@ export default function HomeScreen() {
           hasManualBookLookupSearched ||
           manualBookLookupResults.length > 0);
       const shouldInlineManualLogActions = isKeyboardVisible;
+      const manualLogFooterBottomPadding = Math.max(insets.bottom + 12, 24);
+      const manualLogPinnedFooterClearance = Math.max(
+        insets.bottom + 152,
+        manualLogFooterHeight + 28
+      );
       const isSavingManualLog = savingAction === "manualLog";
       const manualLogActions = (
         <View style={styles.manualLogActionStack}>
@@ -4407,15 +4389,17 @@ export default function HomeScreen() {
         >
         <ScrollView
           ref={manualLogScrollRef}
+          style={styles.manualLogScroll}
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="interactive"
-          automaticallyAdjustKeyboardInsets
           contentContainerStyle={[
             styles.closeSessionContent,
             styles.manualLogContent,
             {
               paddingBottom:
-                insets.bottom + (shouldInlineManualLogActions ? 156 : 152),
+                shouldInlineManualLogActions
+                  ? insets.bottom + 156
+                  : manualLogPinnedFooterClearance,
             },
           ]}
         >
@@ -4479,7 +4463,6 @@ export default function HomeScreen() {
             style={[styles.closeBookInput, styles.manualJournalInput]}
             keyboardType="decimal-pad"
             returnKeyType="next"
-            onFocus={() => setManualLogNoteFocused(false)}
           />
 
           <View
@@ -4497,12 +4480,10 @@ export default function HomeScreen() {
               value={manualLogBookTitle}
               onChangeText={handleManualBookTitleChange}
               onFocus={() => {
-                setManualLogNoteFocused(false);
-                setManualBookTitleFocused(true);
                 setIsManualBookLookupRequested(true);
                 searchManualBookTitle(manualLogBookTitle);
+                scrollManualLogInputAboveKeyboard(manualBookTitleInputRef);
               }}
-              onBlur={() => setManualBookTitleFocused(false)}
               style={styles.manualBookTitleInput}
               returnKeyType="done"
               blurOnSubmit
@@ -4628,12 +4609,14 @@ export default function HomeScreen() {
           ) : null}
 
           <TextInput
+            ref={manualLogNoteInputRef}
             placeholder="A note, if you'd like"
             placeholderTextColor="rgba(255,255,255,0.45)"
             value={manualLogNote}
             onChangeText={setManualLogNote}
-            onFocus={() => setManualLogNoteFocused(true)}
-            onBlur={() => setManualLogNoteFocused(false)}
+            onFocus={() => {
+              scrollManualLogInputAboveKeyboard(manualLogNoteInputRef);
+            }}
             style={[
               styles.closeBookInput,
               styles.manualJournalInput,
@@ -4661,8 +4644,16 @@ export default function HomeScreen() {
           <View
             style={[
               styles.manualLogFooter,
-              { paddingBottom: Math.max(insets.bottom + 12, 24) },
+              { paddingBottom: manualLogFooterBottomPadding },
             ]}
+            onLayout={({ nativeEvent }) => {
+              const nextHeight = nativeEvent.layout.height;
+              setManualLogFooterHeight((currentHeight) =>
+                Math.abs(currentHeight - nextHeight) < 1
+                  ? currentHeight
+                  : nextHeight
+              );
+            }}
           >
             {manualLogActions}
           </View>
@@ -8776,6 +8767,9 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
     paddingTop: 14,
     paddingBottom: 20,
+  },
+  manualLogScroll: {
+    flex: 1,
   },
   manualLogBackButton: {
     marginBottom: 14,
