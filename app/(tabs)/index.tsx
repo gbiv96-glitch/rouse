@@ -4,7 +4,7 @@ import * as Haptics from "expo-haptics";
 import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import { usePostHog } from "posthog-react-native";
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import {
   Alert,
   Animated,
@@ -12,6 +12,7 @@ import {
   AppStateStatus,
   Image,
   findNodeHandle,
+  InputAccessoryView,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
@@ -22,6 +23,7 @@ import {
   StyleSheet,
   TextInput,
   TouchableWithoutFeedback,
+  UIManager,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -53,6 +55,7 @@ const LEGACY_UNATTACHED_SESSION_TITLE = "Unassigned reading";
 const UNATTACHED_SESSION_TITLE = "A reading moment";
 const UNATTACHED_SESSION_DISPLAY_TITLE = "A reading moment";
 const BOOK_LOOKUP_TIMEOUT_MS = 9500;
+const MANUAL_LOG_NOTE_ACCESSORY_ID = "manual-log-note-accessory";
 const serifFont = Fonts?.serif ?? "serif";
 const colors = {
   background: "#F7F3EA",
@@ -1091,8 +1094,10 @@ export default function HomeScreen() {
   const [manualLogNote, setManualLogNote] = useState("");
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [bookTitleFocused, setBookTitleFocused] = useState(false);
+  const [manualBookTitleFocused, setManualBookTitleFocused] = useState(false);
+  const [manualLogNoteFocused, setManualLogNoteFocused] = useState(false);
+  const [manualLogNoteSpacerHeight, setManualLogNoteSpacerHeight] = useState(0);
   const [hasUserEditedBookQuery, setHasUserEditedBookQuery] = useState(false);
-  const [manualLogFooterHeight, setManualLogFooterHeight] = useState(0);
   const [completedBookReviewFocused, setCompletedBookReviewFocused] =
     useState(false);
   const [isEnteringReading, setIsEnteringReading] = useState(false);
@@ -1122,6 +1127,17 @@ export default function HomeScreen() {
   const bookInputScrollYRef = useRef(0);
   const bookReflectionInputHeightRef = useRef(0);
   const manualLogScrollRef = useRef<ScrollView | null>(null);
+  const manualBookLookupPanelLayoutRef = useRef({ y: 0, height: 0 });
+  const hasAutoScrolledManualBookResultsRef = useRef(false);
+  const manualLogNoteInputHeightRef = useRef(0);
+  const manualLogNoteLayoutRef = useRef({ y: 0, height: 0 });
+  const manualLogScrollOffsetRef = useRef(0);
+  const manualLogViewportHeightRef = useRef(0);
+  const manualLogNaturalContentHeightRef = useRef(0);
+  const manualLogNoteSpacerHeightRef = useRef(0);
+  const manualLogNoteFocusedRef = useRef(false);
+  const shouldRecoverManualLogAfterKeyboardRef = useRef(false);
+  const keyboardFrameRef = useRef({ height: 0, screenY: 0 });
   const completedBookScrollRef = useRef<ScrollView | null>(null);
   const completedBookScrollYRef = useRef(0);
   const completedBookReviewInputHeightRef = useRef(0);
@@ -1167,11 +1183,23 @@ export default function HomeScreen() {
   };
 
   useEffect(() => {
-    const keyboardShowSubscription = Keyboard.addListener("keyboardDidShow", () => {
+    const keyboardShowSubscription = Keyboard.addListener("keyboardDidShow", (event) => {
+      keyboardFrameRef.current = {
+        height: event.endCoordinates.height,
+        screenY: event.endCoordinates.screenY,
+      };
       setIsKeyboardVisible(true);
     });
     const keyboardHideSubscription = Keyboard.addListener("keyboardDidHide", () => {
+      shouldRecoverManualLogAfterKeyboardRef.current =
+        shouldRecoverManualLogAfterKeyboardRef.current ||
+        manualLogNoteFocusedRef.current;
+      keyboardFrameRef.current = { height: 0, screenY: 0 };
+      manualLogNoteFocusedRef.current = false;
+      manualLogNoteSpacerHeightRef.current = 0;
       setIsKeyboardVisible(false);
+      setManualLogNoteFocused(false);
+      setManualLogNoteSpacerHeight(0);
       setCompletedBookReviewFocused(false);
     });
 
@@ -2406,26 +2434,209 @@ export default function HomeScreen() {
     }, 450);
   };
 
-  const scrollManualLogInputAboveKeyboard = (
-    inputRef: RefObject<TextInput | null>,
-  ) => {
-    const scrollDelay = isKeyboardVisible ? 80 : 280;
+  const scrollManualLogInputAboveKeyboard = useCallback(
+    (
+      inputRef: RefObject<TextInput | null>,
+      extraScrollHeight = 48,
+      delay = isKeyboardVisible ? 80 : 280,
+    ) => {
+      setTimeout(() => {
+        const inputNode = inputRef.current;
+        const scrollResponder =
+          manualLogScrollRef.current?.getScrollResponder();
+        const inputHandle = inputNode ? findNodeHandle(inputNode) : null;
 
-    setTimeout(() => {
-      const inputNode = inputRef.current;
-      const scrollResponder =
-        manualLogScrollRef.current?.getScrollResponder();
-      const inputHandle = inputNode ? findNodeHandle(inputNode) : null;
+        if (!scrollResponder || inputHandle == null) return;
 
-      if (!scrollResponder || inputHandle == null) return;
+        scrollResponder.scrollResponderScrollNativeHandleToKeyboard(
+          inputHandle,
+          extraScrollHeight,
+          true,
+        );
+      }, delay);
+    },
+    [isKeyboardVisible],
+  );
 
-      scrollResponder.scrollResponderScrollNativeHandleToKeyboard(
-        inputHandle,
-        28,
-        true,
+  useEffect(() => {
+    if (
+      !isKeyboardVisible ||
+      !manualBookTitleFocused ||
+      manualBookLookupResults.length === 0 ||
+      hasAutoScrolledManualBookResultsRef.current
+    ) {
+      return;
+    }
+
+    const scrollTimeout = setTimeout(() => {
+      const scrollView = manualLogScrollRef.current;
+      const scrollViewHandle = scrollView ? findNodeHandle(scrollView) : null;
+      const panelLayout = manualBookLookupPanelLayoutRef.current;
+
+      if (!scrollView || scrollViewHandle == null || panelLayout.height <= 0) {
+        return;
+      }
+
+      UIManager.measureInWindow(
+        scrollViewHandle,
+        (_x, scrollViewY, _width, viewportHeight) => {
+          const keyboardTop = keyboardFrameRef.current.screenY;
+          const visibleViewportHeight = Math.max(
+            0,
+            Math.min(
+              viewportHeight,
+              keyboardTop > 0 ? keyboardTop - scrollViewY : viewportHeight,
+            ),
+          );
+          const resultPreviewHeight = Math.min(panelLayout.height, 112);
+          const minimumOffset = Math.max(
+            0,
+            panelLayout.y + resultPreviewHeight - visibleViewportHeight + 20,
+          );
+          const maximumContextOffset = Math.max(0, panelLayout.y - 20);
+          const targetOffset = Math.min(
+            Math.max(manualLogScrollOffsetRef.current, minimumOffset),
+            maximumContextOffset,
+          );
+          const maximumScrollOffset = Math.max(
+            0,
+            manualLogNaturalContentHeightRef.current - viewportHeight,
+          );
+
+          hasAutoScrolledManualBookResultsRef.current = true;
+          scrollView.scrollTo({
+            y: Math.min(targetOffset, maximumScrollOffset),
+            animated: true,
+          });
+        },
       );
-    }, scrollDelay);
-  };
+    }, 80);
+
+    return () => clearTimeout(scrollTimeout);
+  }, [
+    isKeyboardVisible,
+    manualBookLookupResults.length,
+    manualBookTitleFocused,
+  ]);
+
+  useEffect(() => {
+    if (isKeyboardVisible && manualLogNoteFocused) return;
+
+    manualLogNoteSpacerHeightRef.current = 0;
+    setManualLogNoteSpacerHeight(0);
+  }, [isKeyboardVisible, manualLogNoteFocused]);
+
+  const positionManualLogNoteAboveKeyboard = useCallback(() => {
+    requestAnimationFrame(() => {
+      const scrollView = manualLogScrollRef.current;
+      const keyboardFrame = keyboardFrameRef.current;
+      const noteLayout = manualLogNoteLayoutRef.current;
+      const naturalContentHeight = manualLogNaturalContentHeightRef.current;
+
+      if (
+        !scrollView ||
+        !manualLogNoteFocusedRef.current ||
+        keyboardFrame.height <= 0 ||
+        noteLayout.height <= 0 ||
+        naturalContentHeight <= 0
+      ) {
+        return;
+      }
+
+      const scrollViewHandle = findNodeHandle(scrollView);
+
+      if (scrollViewHandle == null) return;
+
+      UIManager.measureInWindow(
+        scrollViewHandle,
+        (_x, scrollViewY, _width, measuredHeight) => {
+          if (
+            !manualLogNoteFocusedRef.current ||
+            keyboardFrameRef.current.height <= 0
+          ) {
+            return;
+          }
+
+          manualLogViewportHeightRef.current = measuredHeight;
+          const viewportHeight = measuredHeight;
+          const keyboardTop = keyboardFrameRef.current.screenY;
+          const visibleViewportHeight = Math.max(
+            0,
+            Math.min(
+              viewportHeight,
+              keyboardTop > 0 ? keyboardTop - scrollViewY : viewportHeight,
+            ),
+          );
+          const bottomBreathingRoom = 24;
+          const minimumOffset = Math.max(
+            0,
+            noteLayout.y +
+              noteLayout.height -
+              visibleViewportHeight +
+              bottomBreathingRoom,
+          );
+          const maximumLabelPreservingOffset = Math.max(
+            0,
+            noteLayout.y - 20,
+          );
+          const requestedOffset = Math.min(
+            Math.max(manualLogScrollOffsetRef.current, minimumOffset),
+            maximumLabelPreservingOffset,
+          );
+          const naturalMaximumOffset = Math.max(
+            0,
+            naturalContentHeight - viewportHeight,
+          );
+          const requiredSpacerHeight = Math.max(
+            0,
+            Math.ceil(requestedOffset - naturalMaximumOffset),
+          );
+          const currentSpacerHeight = manualLogNoteSpacerHeightRef.current;
+
+          if (Math.abs(currentSpacerHeight - requiredSpacerHeight) > 1) {
+            manualLogNoteSpacerHeightRef.current = requiredSpacerHeight;
+            setManualLogNoteSpacerHeight(requiredSpacerHeight);
+            return;
+          }
+
+          const maximumOffset = Math.max(
+            0,
+            naturalContentHeight + currentSpacerHeight - viewportHeight,
+          );
+
+          const clampedOffset = Math.min(requestedOffset, maximumOffset);
+
+          if (Math.abs(clampedOffset - manualLogScrollOffsetRef.current) > 1) {
+            scrollView.scrollTo({ y: clampedOffset, animated: true });
+          }
+        },
+      );
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!isKeyboardVisible || !manualLogNoteFocused) return;
+
+    positionManualLogNoteAboveKeyboard();
+  }, [
+    isKeyboardVisible,
+    manualLogNoteFocused,
+    positionManualLogNoteAboveKeyboard,
+  ]);
+
+  useEffect(() => {
+    if (
+      isKeyboardVisible ||
+      !shouldRecoverManualLogAfterKeyboardRef.current
+    ) {
+      return;
+    }
+
+    shouldRecoverManualLogAfterKeyboardRef.current = false;
+    requestAnimationFrame(() => {
+      manualLogScrollRef.current?.scrollToEnd({ animated: true });
+    });
+  }, [isKeyboardVisible]);
 
   const handleManualBookTitleChange = (nextTitle: string) => {
     const trimmedTitle = nextTitle.trim();
@@ -4325,12 +4536,6 @@ export default function HomeScreen() {
         (isManualBookLookupLoading ||
           hasManualBookLookupSearched ||
           manualBookLookupResults.length > 0);
-      const shouldInlineManualLogActions = isKeyboardVisible;
-      const manualLogFooterBottomPadding = Math.max(insets.bottom + 12, 24);
-      const manualLogPinnedFooterClearance = Math.max(
-        insets.bottom + 152,
-        manualLogFooterHeight + 28
-      );
       const isSavingManualLog = savingAction === "manualLog";
       const manualLogActions = (
         <View style={styles.manualLogActionStack}>
@@ -4390,17 +4595,33 @@ export default function HomeScreen() {
         <ScrollView
           ref={manualLogScrollRef}
           style={styles.manualLogScroll}
+          onLayout={({ nativeEvent }) => {
+            manualLogViewportHeightRef.current = nativeEvent.layout.height;
+
+            if (manualLogNoteFocusedRef.current && isKeyboardVisible) {
+              positionManualLogNoteAboveKeyboard();
+            }
+          }}
+          onContentSizeChange={(_width, height) => {
+            manualLogNaturalContentHeightRef.current = Math.max(
+              0,
+              height - manualLogNoteSpacerHeightRef.current,
+            );
+
+            if (manualLogNoteFocusedRef.current && isKeyboardVisible) {
+              positionManualLogNoteAboveKeyboard();
+            }
+          }}
+          onScroll={({ nativeEvent }) => {
+            manualLogScrollOffsetRef.current = nativeEvent.contentOffset.y;
+          }}
+          scrollEventThrottle={16}
           keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
+          keyboardDismissMode={Platform.OS === "ios" ? "interactive" : "on-drag"}
           contentContainerStyle={[
             styles.closeSessionContent,
             styles.manualLogContent,
-            {
-              paddingBottom:
-                shouldInlineManualLogActions
-                  ? insets.bottom + 156
-                  : manualLogPinnedFooterClearance,
-            },
+            { paddingBottom: Math.max(insets.bottom, 20) },
           ]}
         >
           <Pressable
@@ -4416,11 +4637,15 @@ export default function HomeScreen() {
             </ThemedText>
           </Pressable>
 
-          <ThemedText style={styles.closeEyebrow}>Reading moment</ThemedText>
-          <ThemedText style={styles.closeTitle}>What did the time hold?</ThemedText>
-          <ThemedText style={styles.closeMinutes}>
-            For reading outside the timer.
-          </ThemedText>
+          <Pressable accessible={false} onPress={Keyboard.dismiss}>
+            <ThemedText style={styles.closeEyebrow}>Reading moment</ThemedText>
+            <ThemedText style={styles.closeTitle}>
+              What did the time hold?
+            </ThemedText>
+            <ThemedText style={styles.closeMinutes}>
+              For reading outside the timer.
+            </ThemedText>
+          </Pressable>
 
           <View style={styles.manualPresetRow}>
             {presetMinutes.map((minutes) => {
@@ -4463,6 +4688,9 @@ export default function HomeScreen() {
             style={[styles.closeBookInput, styles.manualJournalInput]}
             keyboardType="decimal-pad"
             returnKeyType="next"
+            onFocus={() => {
+              shouldRecoverManualLogAfterKeyboardRef.current = false;
+            }}
           />
 
           <View
@@ -4480,10 +4708,14 @@ export default function HomeScreen() {
               value={manualLogBookTitle}
               onChangeText={handleManualBookTitleChange}
               onFocus={() => {
+                shouldRecoverManualLogAfterKeyboardRef.current = false;
+                setManualBookTitleFocused(true);
+                hasAutoScrolledManualBookResultsRef.current = false;
                 setIsManualBookLookupRequested(true);
                 searchManualBookTitle(manualLogBookTitle);
                 scrollManualLogInputAboveKeyboard(manualBookTitleInputRef);
               }}
+              onBlur={() => setManualBookTitleFocused(false)}
               style={styles.manualBookTitleInput}
               returnKeyType="done"
               blurOnSubmit
@@ -4524,7 +4756,13 @@ export default function HomeScreen() {
           ) : null}
 
           {shouldShowManualBookLookup ? (
-            <View style={styles.manualBookLookupPanel}>
+            <View
+              style={styles.manualBookLookupPanel}
+              onLayout={({ nativeEvent }) => {
+                const { y, height } = nativeEvent.layout;
+                manualBookLookupPanelLayoutRef.current = { y, height };
+              }}
+            >
               <View style={styles.bookLookupHeaderRow}>
                 <ThemedText style={styles.manualBookLookupTitle}>
                   Possible books
@@ -4608,24 +4846,67 @@ export default function HomeScreen() {
             </View>
           ) : null}
 
-          <TextInput
-            ref={manualLogNoteInputRef}
-            placeholder="A note, if you'd like"
-            placeholderTextColor="rgba(255,255,255,0.45)"
-            value={manualLogNote}
-            onChangeText={setManualLogNote}
-            onFocus={() => {
-              scrollManualLogInputAboveKeyboard(manualLogNoteInputRef);
+          <Pressable
+            accessible={false}
+            style={styles.manualNoteWrapper}
+            onPress={() => manualLogNoteInputRef.current?.focus()}
+            onLayout={({ nativeEvent }) => {
+              const { y, height } = nativeEvent.layout;
+              const previousLayout = manualLogNoteLayoutRef.current;
+              manualLogNoteLayoutRef.current = { y, height };
+
+              if (
+                manualLogNoteFocusedRef.current &&
+                isKeyboardVisible &&
+                (Math.abs(previousLayout.y - y) > 1 ||
+                  Math.abs(previousLayout.height - height) > 1)
+              ) {
+                positionManualLogNoteAboveKeyboard();
+              }
             }}
-            style={[
-              styles.closeBookInput,
-              styles.manualJournalInput,
-              styles.manualBookInput,
-              styles.manualNoteInput,
-            ]}
-            multiline
-            textAlignVertical="top"
-          />
+          >
+            <ThemedText style={styles.manualNoteLabel}>
+              {"A note, if you'd like"}
+            </ThemedText>
+            <TextInput
+              ref={manualLogNoteInputRef}
+              accessibilityLabel="A note, if you'd like"
+              value={manualLogNote}
+              onChangeText={setManualLogNote}
+              onFocus={() => {
+                manualLogNoteFocusedRef.current = true;
+                setManualLogNoteFocused(true);
+              }}
+              onBlur={() => {
+                shouldRecoverManualLogAfterKeyboardRef.current = true;
+                manualLogNoteFocusedRef.current = false;
+                setManualLogNoteFocused(false);
+              }}
+              onContentSizeChange={({ nativeEvent }) => {
+                const nextHeight = nativeEvent.contentSize.height;
+                const previousHeight = manualLogNoteInputHeightRef.current;
+                manualLogNoteInputHeightRef.current = nextHeight;
+
+                if (
+                  !manualLogNoteFocusedRef.current ||
+                  !isKeyboardVisible ||
+                  nextHeight <= previousHeight + 1
+                ) {
+                  return;
+                }
+
+                positionManualLogNoteAboveKeyboard();
+              }}
+              inputAccessoryViewID={
+                Platform.OS === "ios"
+                  ? MANUAL_LOG_NOTE_ACCESSORY_ID
+                  : undefined
+              }
+              style={styles.manualNoteInput}
+              multiline
+              textAlignVertical="top"
+            />
+          </Pressable>
 
           {manualLogError && (
             <ThemedText style={styles.manualLogError}>
@@ -4633,32 +4914,50 @@ export default function HomeScreen() {
             </ThemedText>
           )}
 
-          {shouldInlineManualLogActions ? (
-            <View style={styles.manualLogInlineActions}>
-              {manualLogActions}
-            </View>
-          ) : null}
-
-        </ScrollView>
-        {!shouldInlineManualLogActions ? (
           <View
             style={[
-              styles.manualLogFooter,
-              { paddingBottom: manualLogFooterBottomPadding },
+              styles.manualLogInlineActions,
+              isKeyboardVisible && styles.manualLogInlineActionsKeyboard,
             ]}
-            onLayout={({ nativeEvent }) => {
-              const nextHeight = nativeEvent.layout.height;
-              setManualLogFooterHeight((currentHeight) =>
-                Math.abs(currentHeight - nextHeight) < 1
-                  ? currentHeight
-                  : nextHeight
-              );
-            }}
           >
             {manualLogActions}
           </View>
-        ) : null}
+
+          <View
+            pointerEvents="none"
+            style={{ height: manualLogNoteSpacerHeight }}
+            onLayout={() => {
+              if (manualLogNoteFocusedRef.current && isKeyboardVisible) {
+                positionManualLogNoteAboveKeyboard();
+              }
+            }}
+          />
+
+        </ScrollView>
         </KeyboardAvoidingView>
+        {Platform.OS === "ios" ? (
+          <InputAccessoryView
+            nativeID={MANUAL_LOG_NOTE_ACCESSORY_ID}
+            backgroundColor="transparent"
+          >
+            <View style={styles.manualLogNoteAccessory}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Done editing note"
+                hitSlop={8}
+                style={({ pressed }) => [
+                  styles.manualLogNoteAccessoryButton,
+                  pressed && styles.buttonPressed,
+                ]}
+                onPress={Keyboard.dismiss}
+              >
+                <ThemedText style={styles.manualLogNoteAccessoryButtonText}>
+                  Done
+                </ThemedText>
+              </Pressable>
+            </View>
+          </InputAccessoryView>
+        ) : null}
       </ThemedView>
     );
     }
@@ -8939,11 +9238,27 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     paddingVertical: 8,
   },
+  manualNoteWrapper: {
+    marginTop: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,248,237,0.22)",
+    paddingTop: 10,
+  },
+  manualNoteLabel: {
+    ...typography.role.label,
+    color: "rgba(255,248,237,0.58)",
+    fontSize: 12,
+    lineHeight: 17,
+  },
   manualNoteInput: {
-    minHeight: 88,
+    ...typography.role.body,
+    minHeight: 70,
+    color: "#FFF8ED",
     fontSize: 16,
     lineHeight: 24,
-    paddingTop: 12,
+    paddingHorizontal: 0,
+    paddingTop: 6,
+    paddingBottom: 10,
   },
   manualPresetRow: {
     flexDirection: "row",
@@ -9000,16 +9315,35 @@ const styles = StyleSheet.create({
     gap: 10,
     backgroundColor: "transparent",
   },
-  manualLogFooter: {
-    backgroundColor: "rgba(27,66,52,0.96)",
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255,248,237,0.10)",
-  },
   manualLogInlineActions: {
     backgroundColor: "transparent",
     marginTop: 22,
     marginBottom: 12,
+  },
+  manualLogInlineActionsKeyboard: {
+    marginTop: 30,
+    marginBottom: 24,
+  },
+  manualLogNoteAccessory: {
+    height: 38,
+    alignItems: "flex-end",
+    justifyContent: "center",
+    backgroundColor: "transparent",
+    paddingHorizontal: 10,
+  },
+  manualLogNoteAccessoryButton: {
+    width: 54,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 8,
+    backgroundColor: "rgba(18,63,52,0.94)",
+  },
+  manualLogNoteAccessoryButtonText: {
+    ...typography.role.button,
+    color: "#FFF8ED",
+    fontSize: 14,
+    lineHeight: 18,
   },
   manualLogPrimaryAction: {
     flex: 0,
