@@ -2340,6 +2340,9 @@ export default function HomeScreen() {
 
   const selectGoogleBook = (book: BookMetadata) => {
     Keyboard.dismiss();
+    captureAnalyticsEvent("book_selected_from_search", {
+      context: "post_session_attribution",
+    });
     bookLookupRequestId.current += 1;
     setBookInputError(null);
     setHasUserEditedBookQuery(false);
@@ -2680,6 +2683,9 @@ export default function HomeScreen() {
     setIsManualBookLookupRequested(false);
     resetManualBookLookup();
     Keyboard.dismiss();
+    captureAnalyticsEvent("book_selected_from_search", {
+      context: "manual_log",
+    });
   };
 
   const findKnownBookMetadataByTitle = (title: string): BookMetadata | null => {
@@ -2833,6 +2839,13 @@ export default function HomeScreen() {
       duration_bucket: getReadingDurationBucket(sessionSeconds),
       reflection_added: Boolean(trimmedReflection),
     });
+
+    if (didSanctuaryStageChange && updatedSanctuaryStageNumber > 0) {
+      captureAnalyticsEvent("sanctuary_stage_advanced", {
+        stage: updatedSanctuaryStageNumber,
+        source: "timed",
+      });
+    }
 
     return {
       sessionId: newSession.id,
@@ -3043,6 +3056,11 @@ export default function HomeScreen() {
     await AsyncStorage.multiSet(storageUpdates);
 
     setSessionMessage("Reading moment deleted");
+    captureAnalyticsEvent("reading_session_deleted", {
+      duration_bucket: getReadingDurationBucket(deletedSeconds),
+      attribution: isUnattachedSessionTitle(sessionToDelete.title) ? "unattributed" : "book",
+      source: sessionToDelete.source ?? "timed",
+    });
     setTimeout(() => {
       setSessionMessage(null);
     }, 3000);
@@ -3200,6 +3218,7 @@ export default function HomeScreen() {
       await Linking.openURL(
         `mailto:support@rousd.app?subject=${subject}&body=${body}`,
       );
+      captureAnalyticsEvent("feedback_opened");
     } catch (error) {
       warnInDev("Rousd could not open the email client.", error);
       Alert.alert(
@@ -3365,6 +3384,13 @@ export default function HomeScreen() {
       reflection_added: Boolean(trimmedNote),
     });
 
+    if (didSanctuaryStageChange && updatedSanctuaryStageNumber > 0) {
+      captureAnalyticsEvent("sanctuary_stage_advanced", {
+        stage: updatedSanctuaryStageNumber,
+        source: "manual_log",
+      });
+    }
+
     setTimeout(() => {
       setSessionMessage(null);
     }, 3500);
@@ -3422,6 +3448,7 @@ export default function HomeScreen() {
   const dismissWelcomeScreen = async () => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     await AsyncStorage.setItem(HAS_SEEN_WELCOME_KEY, "true");
+    captureAnalyticsEvent("welcome_dismissed");
     setScreen("home");
   };
 

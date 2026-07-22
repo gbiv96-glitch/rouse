@@ -11,6 +11,7 @@ import { RousdPalette } from '@/constants/theme';
 import { typographyFontsToLoad } from '@/constants/typography';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import * as Sentry from '@sentry/react-native';
+import { PostHogErrorBoundary, PostHogGlobalErrorHandler } from '@/components/posthog-error-boundary';
 
 Sentry.init({
   dsn: 'https://7464b16b60bdbba00951a5533c3729ad@o4511662991736832.ingest.us.sentry.io/4511662995537920',
@@ -58,8 +59,14 @@ const rousdDarkTheme = {
 };
 
 const posthogApiKey = process.env.EXPO_PUBLIC_POSTHOG_API_KEY;
-const posthogHost = process.env.EXPO_PUBLIC_POSTHOG_HOST;
+const posthogHost = process.env.EXPO_PUBLIC_POSTHOG_HOST ?? 'https://us.i.posthog.com';
 const posthogEnabled = Boolean(posthogApiKey) && !__DEV__;
+
+if (__DEV__ && !posthogApiKey) {
+  console.warn(
+    'EXPO_PUBLIC_POSTHOG_API_KEY variable required by PostHog is missing or un-configured, this causes events to be silently missed. This error stops appearing once EXPO_PUBLIC_POSTHOG_API_KEY is configured',
+  );
+}
 
 export default Sentry.wrap(function RootLayout() {
   const colorScheme = useColorScheme();
@@ -85,16 +92,18 @@ export default Sentry.wrap(function RootLayout() {
         host: posthogHost,
         disabled: !posthogEnabled,
         captureAppLifecycleEvents: true,
-        enableSessionReplay: false,
       }}
       autocapture={false}
     >
-      <ThemeProvider value={colorScheme === 'dark' ? rousdDarkTheme : rousdLightTheme}>
-        <Stack>
-          <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        </Stack>
-        <StatusBar style="dark" />
-      </ThemeProvider>
+      <PostHogErrorBoundary>
+        <PostHogGlobalErrorHandler />
+        <ThemeProvider value={colorScheme === 'dark' ? rousdDarkTheme : rousdLightTheme}>
+          <Stack>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+          </Stack>
+          <StatusBar style="dark" />
+        </ThemeProvider>
+      </PostHogErrorBoundary>
     </PostHogProvider>
   );
 });
