@@ -57,9 +57,9 @@ const rousdDarkTheme = {
   },
 };
 
-const posthogApiKey = process.env.EXPO_PUBLIC_POSTHOG_API_KEY;
-const posthogHost = process.env.EXPO_PUBLIC_POSTHOG_HOST;
-const posthogEnabled = Boolean(posthogApiKey) && !__DEV__;
+const posthogApiKey = process.env.EXPO_PUBLIC_POSTHOG_API_KEY?.trim();
+const posthogHost = process.env.EXPO_PUBLIC_POSTHOG_HOST?.trim();
+const posthogEnabled = Boolean(posthogApiKey && posthogHost);
 
 export default Sentry.wrap(function RootLayout() {
   const colorScheme = useColorScheme();
@@ -84,8 +84,9 @@ export default Sentry.wrap(function RootLayout() {
       options={{
         host: posthogHost,
         disabled: !posthogEnabled,
-        captureAppLifecycleEvents: true,
+        captureAppLifecycleEvents: false,
         enableSessionReplay: false,
+        disableSurveys: true,
       }}
       autocapture={false}
     >

@@ -136,7 +136,6 @@ type SavingAction =
   | "bookInput"
   | "bookInputSkip"
   | "manualLog"
-  | "revealNote"
   | "completedBookSave"
   | "completedBookSkip"
   | null;
@@ -1044,9 +1043,6 @@ export default function HomeScreen() {
   const [manualLogBookTitle, setManualLogBookTitle] = useState("");
   const [manualLogError, setManualLogError] = useState<string | null>(null);
   const [bookInputError, setBookInputError] = useState<string | null>(null);
-  const [sessionReflectionError, setSessionReflectionError] = useState<
-    string | null
-  >(null);
   const [completedBookReviewError, setCompletedBookReviewError] = useState<
     string | null
   >(null);
@@ -1090,7 +1086,6 @@ export default function HomeScreen() {
   const [bookLookupError, setBookLookupError] = useState(false);
   const [sanctuaryReveal, setSanctuaryReveal] =
     useState<SanctuaryReveal | null>(null);
-  const [sessionReflection, setSessionReflection] = useState("");
   const [manualLogNote, setManualLogNote] = useState("");
   const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
   const [bookTitleFocused, setBookTitleFocused] = useState(false);
@@ -1287,8 +1282,6 @@ export default function HomeScreen() {
       warnInDev(
         "Rousd reveal screen opened without a valid sanctuaryReveal; returning home.",
       );
-      setSessionReflection("");
-      setSessionReflectionError(null);
       setSanctuaryReveal(null);
       setCompletedBookMoment(null);
       setScreen("home");
@@ -2189,7 +2182,6 @@ export default function HomeScreen() {
       setSessionMessage(null);
       setSanctuaryReveal(null);
       setCompletedBookMoment(null);
-      setSessionReflection("");
       setBookTitle(selectedBookAtStart?.title ?? "");
       setSelectedBookMetadata(selectedBookAtStart);
       setHasUserEditedBookQuery(false);
@@ -2805,7 +2797,6 @@ export default function HomeScreen() {
     setRecentSessions(updatedSessions);
     setTotalCompletedSessions(updatedTotalCompletedSessions);
     setPendingPostSessionId(null);
-    setSessionReflectionError(null);
     setSanctuaryReveal({
       sessionId: newSession.id,
       stage: updatedSanctuaryStageNumber,
@@ -3177,7 +3168,6 @@ export default function HomeScreen() {
     setManualLogBookTitle(currentBookTitle);
     setManualLogNote("");
     setManualLogError(null);
-    setSessionReflectionError(null);
     setCompletedBookReviewError(null);
     setSelectedManualBookMetadata(null);
     setIsManualBookLookupRequested(false);
@@ -3337,8 +3327,6 @@ export default function HomeScreen() {
     setSelectedManualBookMetadata(null);
     setIsManualBookLookupRequested(false);
     resetManualBookLookup();
-    setSessionReflection("");
-    setSessionReflectionError(null);
     setManualLogError(null);
 
     if (trimmedTitle) {
@@ -3370,52 +3358,17 @@ export default function HomeScreen() {
     }, 3500);
   };
 
-  const saveSessionReflection = async () => {
-    if (!sanctuaryReveal) return;
-
-    const trimmedReflection = sessionReflection.trim();
-    if (!trimmedReflection) return;
-
-    const updatedSessions = recentSessions.map((session) =>
-      session.id === sanctuaryReveal.sessionId
-        ? { ...session, reflection: trimmedReflection }
-        : session,
-    );
-
-    await AsyncStorage.setItem(SESSIONS_KEY, JSON.stringify(updatedSessions));
-    setRecentSessions(updatedSessions);
-
-    captureAnalyticsEvent("reflection_saved", {
-      source: sanctuaryReveal.source,
-    });
-  };
-
-  const dismissSanctuaryReveal = async (options?: { saveReflection?: boolean }) => {
-    const shouldSaveReflection = options?.saveReflection;
-    if (shouldSaveReflection && !beginSavingAction("revealNote")) return;
-
+  const dismissSanctuaryReveal = async () => {
     try {
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      if (shouldSaveReflection) {
-        await saveSessionReflection();
-      }
     } catch (error) {
-      warnInDev("Rousd failed to save reading note.", error);
-      if (shouldSaveReflection) {
-        setSessionReflectionError("That note didn't save. Try once more.");
-      }
+      warnInDev("Rousd failed to return home from the reading reveal.", error);
       return;
-    } finally {
-      if (shouldSaveReflection) {
-        endSavingAction();
-      }
     }
 
     setScreen("home");
     setPendingSessionSeconds(0);
     setPendingSessionStartedWithSelectedBook(false);
-    setSessionReflection("");
-    setSessionReflectionError(null);
     setSanctuaryReveal(null);
   };
 
@@ -5279,26 +5232,17 @@ export default function HomeScreen() {
         );
       }
 
-      const isSavingRevealNote = savingAction === "revealNote";
       const revealActions = (
         <>
-          {sessionReflectionError ? (
-            <ThemedText style={styles.manualLogError}>
-              {sessionReflectionError}
-            </ThemedText>
-          ) : null}
-
           <Pressable
             style={({ pressed }) => [
               styles.bookRevealContinueButton,
-              isSavingRevealNote && { opacity: 0.72 },
               pressed && styles.buttonPressed,
             ]}
-            disabled={isSavingRevealNote}
             onPress={() => dismissSanctuaryReveal()}
           >
             <ThemedText style={styles.bookRevealContinueButtonText}>
-              {isSavingRevealNote ? "Saving..." : "Return home"}
+              Return home
             </ThemedText>
           </Pressable>
         </>
