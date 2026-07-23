@@ -44,6 +44,7 @@ const TOTAL_COMPLETED_SESSIONS_KEY = "totalCompletedSessions";
 const CURRENT_BOOK_KEY = "currentBookTitle";
 const COMPLETED_BOOKS_KEY = "completedBooks";
 const HAS_SEEN_WELCOME_KEY = "hasSeenRousdWelcome";
+const PRIVACY_POLICY_URL = "https://www.rousd.app/privacy";
 const ACTIVE_SESSION_START_KEY = "activeReadingSessionStartTime";
 const ACTIVE_SESSION_TODAY_START_SECONDS_KEY =
   "activeReadingSessionTodayStartSeconds";
@@ -3199,6 +3200,22 @@ export default function HomeScreen() {
     }
   };
 
+  const openPrivacyPolicy = async () => {
+    try {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+      const canOpenPrivacyPolicy = await Linking.canOpenURL(PRIVACY_POLICY_URL);
+      if (!canOpenPrivacyPolicy) {
+        warnInDev("Rousd could not open the Privacy Policy URL.");
+        return;
+      }
+
+      await Linking.openURL(PRIVACY_POLICY_URL);
+    } catch (error) {
+      warnInDev("Rousd could not open the Privacy Policy URL.", error);
+    }
+  };
+
   const openHomeDestination = async (destination: Screen) => {
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 
@@ -5924,6 +5941,29 @@ export default function HomeScreen() {
                 />
               </Pressable>
             </View>
+
+            <Pressable
+              accessibilityRole="link"
+              accessibilityLabel="Privacy Policy"
+              style={({ pressed }) => [
+                styles.menuFeedbackCard,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={openPrivacyPolicy}
+            >
+              <View style={styles.menuFeedbackIconCircle}>
+                <Ionicons
+                  name="document-text-outline"
+                  size={18}
+                  color="rgba(47,93,80,0.58)"
+                />
+              </View>
+              <View style={styles.menuNavCopy}>
+                <ThemedText style={styles.menuFeedbackTitle}>
+                  Privacy Policy
+                </ThemedText>
+              </View>
+            </Pressable>
 
             <Pressable
               style={({ pressed }) => [
