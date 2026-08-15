@@ -6179,9 +6179,6 @@ export default function HomeScreen() {
                 )}
               </View>
 
-              <ThemedText style={styles.finishedBookDetailLabel}>
-                From your Shelf
-              </ThemedText>
               <ThemedText style={styles.finishedBookDetailTitle}>
                 {book.title}
               </ThemedText>
@@ -6197,9 +6194,11 @@ export default function HomeScreen() {
 
             {isEditingFinishedBookNote ? (
               <View style={styles.finishedBookDetailReviewCard}>
-                <ThemedText style={styles.finishedBookDetailReviewLabel}>
-                  Shelf note
-                </ThemedText>
+                <View style={styles.finishedBookDetailReviewHeader}>
+                  <ThemedText style={styles.finishedBookDetailReviewLabel}>
+                    Shelf note
+                  </ThemedText>
+                </View>
                 <TextInput
                   accessibilityLabel="Shelf note"
                   value={finishedBookNoteDraft}
@@ -6229,18 +6228,28 @@ export default function HomeScreen() {
               </View>
             ) : review ? (
               <View style={styles.finishedBookDetailReviewCard}>
-                <ThemedText style={styles.finishedBookDetailReviewLabel}>
-                  Shelf note
-                </ThemedText>
+                <View style={styles.finishedBookDetailReviewHeader}>
+                  <ThemedText style={styles.finishedBookDetailReviewLabel}>
+                    Shelf note
+                  </ThemedText>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Edit Shelf note"
+                    hitSlop={10}
+                    onPress={beginEditingFinishedBookNote}
+                    style={({ pressed }) => [
+                      styles.finishedBookNoteEditButton,
+                      pressed && styles.buttonPressed,
+                    ]}
+                  >
+                    <ThemedText style={styles.finishedBookNoteEditText}>
+                      Edit
+                    </ThemedText>
+                  </Pressable>
+                </View>
                 <ThemedText style={styles.finishedBookDetailReview}>
                   {review}
                 </ThemedText>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={beginEditingFinishedBookNote}
-                >
-                  <ThemedText style={styles.finishedBookNoteEditText}>Edit note</ThemedText>
-                </Pressable>
               </View>
             ) : (
               <Pressable
@@ -6248,44 +6257,43 @@ export default function HomeScreen() {
                 style={styles.finishedBookAddNoteButton}
                 onPress={beginEditingFinishedBookNote}
               >
-                <ThemedText style={styles.finishedBookAddNoteText}>Add a Shelf note</ThemedText>
+                <ThemedText style={styles.finishedBookAddNoteText}>Add a shelf note</ThemedText>
               </Pressable>
             )}
 
-            <ThemedText style={styles.finishedBookDetailMemoryLine}>
-              {sessionCount} {sessionLabel}
-              {" \u00b7 "}
-              {totalReadingTime} with this book
-            </ThemedText>
-
-            {bookHistorySessions.length > 0 ? (
-              <View style={styles.finishedBookHistory}>
+            <View style={styles.finishedBookHistory}>
+              <View style={styles.finishedBookHistoryIntro}>
                 <ThemedText style={styles.finishedBookHistoryTitle}>
                   Reading history
                 </ThemedText>
-                {bookHistorySessions.map((session) => {
-                  const sessionNote = getSessionNote(session);
-
-                  return (
-                    <View key={session.id} style={styles.finishedBookHistoryRow}>
-                      <View style={styles.finishedBookHistoryCopy}>
-                        <ThemedText style={styles.finishedBookHistoryDate}>
-                          {formatSessionTimestamp(session.createdAt)}
-                        </ThemedText>
-                        {sessionNote ? (
-                          <ThemedText style={styles.finishedBookHistoryNote}>
-                            {sessionNote}
-                          </ThemedText>
-                        ) : null}
-                      </View>
-                      <ThemedText style={styles.finishedBookHistoryDuration}>
-                        {formatDuration(Number(session.minutes))}
-                      </ThemedText>
-                    </View>
-                  );
-                })}
+                <ThemedText style={styles.finishedBookDetailMemoryLine}>
+                  {sessionCount} {sessionLabel}
+                  {" \u00b7 "}
+                  {totalReadingTime}
+                </ThemedText>
               </View>
-            ) : null}
+              {bookHistorySessions.map((session) => {
+                const sessionNote = getSessionNote(session);
+
+                return (
+                  <View key={session.id} style={styles.finishedBookHistoryRow}>
+                    <View style={styles.finishedBookHistoryCopy}>
+                      <ThemedText style={styles.finishedBookHistoryDate}>
+                        {formatSessionTimestamp(session.createdAt)}
+                      </ThemedText>
+                      {sessionNote ? (
+                        <ThemedText style={styles.finishedBookHistoryNote}>
+                          {sessionNote}
+                        </ThemedText>
+                      ) : null}
+                    </View>
+                    <ThemedText style={styles.finishedBookHistoryDuration}>
+                      {formatDuration(Number(session.minutes))}
+                    </ThemedText>
+                  </View>
+                );
+              })}
+            </View>
 
             <Pressable
               accessibilityRole="button"
@@ -9185,6 +9193,8 @@ const styles = StyleSheet.create({
   },
   finishedBookReview: {
     ...typography.role.prose,
+    fontFamily: typography.fontFamily.serifRegular,
+    fontStyle: "normal",
     color: "rgba(31,41,51,0.66)",
     fontSize: 14,
     lineHeight: 21,
@@ -9234,16 +9244,6 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     textAlign: "center",
   },
-  finishedBookDetailLabel: {
-    ...typography.role.label,
-    color: "#C4945A",
-    fontSize: 10,
-    lineHeight: 14,
-    letterSpacing: 1.1,
-    textTransform: "uppercase",
-    marginTop: 22,
-    marginBottom: 8,
-  },
   finishedBookDetailTitle: {
     ...typography.role.pageTitle,
     color: "#1A1A14",
@@ -9251,6 +9251,7 @@ const styles = StyleSheet.create({
     lineHeight: 35,
     letterSpacing: 0,
     textAlign: "center",
+    marginTop: 24,
   },
   finishedBookDetailAuthor: {
     ...typography.role.metadata,
@@ -9262,19 +9263,18 @@ const styles = StyleSheet.create({
   },
   finishedBookDetailFinishedDate: {
     ...typography.role.metadata,
-    color: "rgba(90,84,72,0.54)",
-    fontSize: 12,
-    lineHeight: 18,
-    marginTop: 10,
+    color: "rgba(90,84,72,0.46)",
+    fontSize: 11,
+    lineHeight: 17,
+    marginTop: 8,
     textAlign: "center",
   },
   finishedBookDetailMemoryLine: {
     ...typography.role.metadata,
-    color: "rgba(47,93,80,0.58)",
+    color: "rgba(90,84,72,0.48)",
     fontSize: 12,
     lineHeight: 18,
-    textAlign: "center",
-    marginTop: 26,
+    marginTop: 4,
   },
   finishedBookDetailMetaCard: {
     backgroundColor: "rgba(255,248,237,0.30)",
@@ -9317,25 +9317,33 @@ const styles = StyleSheet.create({
     borderRadius: 0,
     paddingVertical: 2,
     paddingHorizontal: 2,
-    marginTop: 24,
+    marginTop: 30,
+  },
+  finishedBookDetailReviewHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 16,
+    marginBottom: 10,
   },
   finishedBookDetailReviewLabel: {
     ...typography.role.metadata,
-    color: "rgba(196,148,90,0.72)",
-    fontSize: 10,
-    lineHeight: 14,
-    letterSpacing: 1,
-    textTransform: "uppercase",
-    marginBottom: 8,
+    color: "rgba(47,93,80,0.58)",
+    fontSize: 12,
+    lineHeight: 18,
   },
   finishedBookDetailReview: {
     ...typography.role.prose,
-    color: "rgba(90,84,72,0.78)",
-    fontSize: 16,
-    lineHeight: 26,
+    fontFamily: typography.fontFamily.serifRegular,
+    fontStyle: "normal",
+    color: "rgba(62,58,50,0.84)",
+    fontSize: 17,
+    lineHeight: 28,
   },
   finishedBookNoteInput: {
     ...typography.role.prose,
+    fontFamily: typography.fontFamily.serifRegular,
+    fontStyle: "normal",
     minHeight: 112,
     color: colors.text,
     fontSize: 16,
@@ -9377,47 +9385,48 @@ const styles = StyleSheet.create({
   },
   finishedBookNoteEditText: {
     ...typography.role.button,
-    color: colors.accent,
-    fontSize: 13,
-    lineHeight: 19,
-    marginTop: 12,
+    color: "rgba(47,93,80,0.66)",
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  finishedBookNoteEditButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 2,
   },
   finishedBookAddNoteButton: {
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: "rgba(47,93,80,0.12)",
-    borderRadius: RousdRadii.control,
-    paddingVertical: 13,
-    marginTop: 24,
+    alignSelf: "flex-start",
+    paddingVertical: 10,
+    paddingHorizontal: 2,
+    marginTop: 26,
   },
   finishedBookAddNoteText: {
     ...typography.role.button,
-    color: colors.accent,
-    fontSize: 14,
-    lineHeight: 20,
+    color: "rgba(47,93,80,0.68)",
+    fontSize: 13,
+    lineHeight: 19,
   },
   finishedBookHistory: {
-    marginTop: 34,
+    marginTop: 38,
     borderTopWidth: 1,
-    borderTopColor: "rgba(47,93,80,0.10)",
+    borderTopColor: "rgba(47,93,80,0.06)",
+  },
+  finishedBookHistoryIntro: {
+    paddingTop: 20,
+    paddingBottom: 10,
   },
   finishedBookHistoryTitle: {
-    ...typography.role.label,
-    color: "rgba(47,93,80,0.58)",
-    fontSize: 11,
-    lineHeight: 16,
-    letterSpacing: 1,
-    textTransform: "uppercase",
-    paddingTop: 18,
-    paddingBottom: 8,
+    ...typography.role.bookTitle,
+    color: "rgba(31,41,51,0.76)",
+    fontSize: 18,
+    lineHeight: 25,
   },
   finishedBookHistoryRow: {
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 18,
     borderBottomWidth: 1,
-    borderBottomColor: "rgba(47,93,80,0.07)",
-    paddingVertical: 15,
+    borderBottomColor: "rgba(47,93,80,0.04)",
+    paddingVertical: 14,
   },
   finishedBookHistoryCopy: {
     flex: 1,
@@ -9425,20 +9434,20 @@ const styles = StyleSheet.create({
   },
   finishedBookHistoryDate: {
     ...typography.role.metadata,
-    color: "rgba(31,41,51,0.58)",
+    color: "rgba(31,41,51,0.50)",
     fontSize: 13,
     lineHeight: 18,
   },
   finishedBookHistoryNote: {
     ...typography.role.prose,
-    color: "rgba(31,41,51,0.72)",
+    color: "rgba(31,41,51,0.68)",
     fontSize: 14,
     lineHeight: 22,
     marginTop: 6,
   },
   finishedBookHistoryDuration: {
     ...typography.role.metadata,
-    color: "rgba(47,93,80,0.64)",
+    color: "rgba(47,93,80,0.46)",
     fontSize: 13,
     lineHeight: 18,
   },
