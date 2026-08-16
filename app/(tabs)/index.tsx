@@ -35,8 +35,20 @@ import { ThemedText } from "@/components/themed-text";
 import { ThemedView } from "@/components/themed-view";
 import { Fonts, RousdPalette, RousdRadii } from "@/constants/theme";
 import { typography } from "@/constants/typography";
-import { searchGoogleBooks } from "@/services/googleBooks";
+import {
+  getBookMetadataFromSearchGroup,
+  searchGoogleBooks,
+  type BookSearchGroup,
+  type GoogleBookCoverCandidate,
+} from "@/services/googleBooks";
 import type { BookMetadata, BookMetadataFields } from "@/types/book";
+import {
+  areBookWorkIdentitiesCompatible,
+  areBooksWorkCompatible,
+  getBookWorkIdentity,
+  getCanonicalBookTitle,
+  normalizeBookIdentityText as normalizeWorkIdentityText,
+} from "@/utils/bookIdentity";
 import { formatDuration } from "@/utils/formatDuration";
 
 const SECONDS_KEY = "todaysReadingSeconds";
@@ -172,6 +184,15 @@ type SanctuaryReveal = {
   source: "timed" | "logged";
   noteSaved?: boolean;
 } & BookMetadataFields;
+
+type CoverChooserTarget = "preSession" | "postSession" | "manualLog";
+
+type CoverChooserState = {
+  target: CoverChooserTarget;
+  bookTitle: string;
+  selectedCoverUrl: string | null;
+  coverCandidates: GoogleBookCoverCandidate[];
+};
 
 const readingThresholdTitle = "You may set your phone down now.";
 const readingThresholdBody = "Return when you’re ready.";
@@ -421,6 +442,129 @@ function getBookMetadataFields(
 
 function normalizeStoredCoverUrl(coverUrl?: string | null) {
   return coverUrl?.replace(/^http:\/\//i, "https://") ?? null;
+}
+
+function getUniqueUsableCoverCandidates(
+  candidates: GoogleBookCoverCandidate[],
+) {
+  const seenCoverUrls = new Set<string>();
+
+  return candidates.flatMap((candidate) => {
+    const normalizedUrl = normalizeStoredCoverUrl(candidate.url)?.trim();
+
+    if (!normalizedUrl || seenCoverUrls.has(normalizedUrl)) {
+      return [];
+    }
+
+    seenCoverUrls.add(normalizedUrl);
+    return [{ ...candidate, url: normalizedUrl }];
+  });
+}
+
+function selectBookMetadataCover(metadata: BookMetadata, coverUrl: string) {
+  return {
+    ...metadata,
+    coverUrl,
+  } satisfies BookMetadata;
+}
+
+function getGoogleBookSelection(group: BookSearchGroup) {
+  const metadata = getBookMetadataFromSearchGroup(group);
+
+  return {
+    metadata: {
+      ...metadata,
+      coverUrl: normalizeStoredCoverUrl(metadata.coverUrl),
+    } satisfies BookMetadata,
+    searchGroup: group,
+  };
+}
+
+function getKnownBookCoverDiscoveryDescriptor(metadata: BookMetadata) {
+  const title = getValidBookTitle(metadata.title);
+  const author = metadata.author?.trim() ?? "";
+  const hasTrustedMetadata = Boolean(
+    metadata.source === "googleBooks" ||
+      metadata.googleBooksId?.trim() ||
+      normalizeBookIdentifier(metadata.isbn10) ||
+      normalizeBookIdentifier(metadata.isbn13),
+  );
+  const workIdentity = getBookWorkIdentity({ title: title ?? "", author });
+
+  if (!title || !author || !hasTrustedMetadata || !workIdentity.key) {
+    return null;
+  }
+
+  const queryTitle = title.replace(/"/g, " ").replace(/\s+/g, " ").trim();
+  const queryAuthor = author.replace(/"/g, " ").replace(/\s+/g, " ").trim();
+
+  return {
+    query: `intitle:"${queryTitle}" inauthor:"${queryAuthor}"`,
+    selectionKey: [
+      workIdentity.key,
+      metadata.googleBooksId?.trim() ?? "",
+      normalizeBookIdentifier(metadata.isbn10),
+      normalizeBookIdentifier(metadata.isbn13),
+    ].join("|"),
+    workIdentity,
+  };
+}
+
+function findKnownBookCoverSearchGroup(
+  metadata: BookMetadata,
+  groups: BookSearchGroup[],
+) {
+  const descriptor = getKnownBookCoverDiscoveryDescriptor(metadata);
+
+  if (!descriptor) return null;
+
+  const compatibleGroups = groups.filter((group) =>
+    areBookWorkIdentitiesCompatible(
+      descriptor.workIdentity,
+      group.representative.workIdentity,
+    ),
+  );
+
+  if (compatibleGroups.length === 0) return null;
+
+  const googleBooksId = metadata.googleBooksId?.trim() ?? "";
+  const knownIsbns = getComparableBookIsbns(metadata);
+  const identifierMatches = compatibleGroups.filter((group) =>
+    group.candidates.some((candidate) => {
+      if (googleBooksId && candidate.volumeId === googleBooksId) {
+        return true;
+      }
+
+      const candidateIsbns = getComparableBookIsbns(candidate);
+      return [...knownIsbns].some((isbn) => candidateIsbns.has(isbn));
+    }),
+  );
+  const unambiguousGroup =
+    identifierMatches.length === 1
+      ? identifierMatches[0]
+      : identifierMatches.length > 1 || compatibleGroups.length !== 1
+        ? null
+        : compatibleGroups[0];
+
+  if (
+    !unambiguousGroup ||
+    getUniqueUsableCoverCandidates(unambiguousGroup.coverCandidates).length <= 1
+  ) {
+    return null;
+  }
+
+  return unambiguousGroup;
+}
+
+function isKnownBookCoverDiscoveryCurrent(
+  currentRequestId: number,
+  currentSelectionKey: string | null,
+  requestId: number,
+  selectionKey: string,
+) {
+  return (
+    currentRequestId === requestId && currentSelectionKey === selectionKey
+  );
 }
 
 function warnInDev(message: string, error?: unknown) {
@@ -825,15 +969,31 @@ function doesReadingSessionMatchBook(
   const sessionGoogleBooksId = session.googleBooksId?.trim();
   const bookGoogleBooksId = book.googleBooksId?.trim();
 
-  if (sessionGoogleBooksId && bookGoogleBooksId) {
-    return sessionGoogleBooksId === bookGoogleBooksId;
+  if (
+    sessionGoogleBooksId &&
+    bookGoogleBooksId &&
+    sessionGoogleBooksId === bookGoogleBooksId
+  ) {
+    return true;
   }
 
   const sessionIsbns = getComparableBookIsbns(session);
   const bookIsbns = getComparableBookIsbns(book);
 
+  if ([...sessionIsbns].some((isbn) => bookIsbns.has(isbn))) {
+    return true;
+  }
+
+  if (areBooksWorkCompatible(session, book)) {
+    return true;
+  }
+
+  if (sessionGoogleBooksId && bookGoogleBooksId) {
+    return false;
+  }
+
   if (sessionIsbns.size > 0 && bookIsbns.size > 0) {
-    return [...sessionIsbns].some((isbn) => bookIsbns.has(isbn));
+    return false;
   }
 
   const sessionTitle = normalizeBookIdentityText(session.title);
@@ -858,12 +1018,21 @@ function getBookDeduplicationKey(book: {
   authors?: unknown;
   googleBooksId?: unknown;
 }) {
+  const title = typeof book.title === "string" ? book.title : "";
+  const author = typeof book.author === "string" ? book.author : "";
+  const authors = Array.isArray(book.authors)
+    ? book.authors.filter((value): value is string => typeof value === "string")
+    : undefined;
+  const workIdentity = getBookWorkIdentity({ title, author, authors });
+
+  if (workIdentity.key) return `work:${workIdentity.key}`;
+
   const googleBooksId =
     typeof book.googleBooksId === "string" ? book.googleBooksId.trim() : "";
   if (googleBooksId) return `google:${googleBooksId}`;
 
-  const title = normalizeBookIdentityText(book.title);
-  const author =
+  const normalizedTitle = normalizeBookIdentityText(book.title);
+  const normalizedAuthor =
     normalizeBookIdentityText(book.author) ||
     (Array.isArray(book.authors)
       ? normalizeBookIdentityText(
@@ -873,8 +1042,10 @@ function getBookDeduplicationKey(book: {
         )
       : "");
 
-  if (title && author) return `title-author:${title}:${author}`;
-  if (title) return `title:${title}`;
+  if (normalizedTitle && normalizedAuthor) {
+    return `title-author:${normalizedTitle}:${normalizedAuthor}`;
+  }
+  if (normalizedTitle) return `title:${normalizedTitle}`;
   const id = typeof book.id === "string" ? book.id.trim() : "";
   if (id) return `id:${id}`;
   return "";
@@ -956,38 +1127,26 @@ function isSameFinishedBook(
   const firstGoogleBooksId = first.googleBooksId?.trim();
   const secondGoogleBooksId = second.googleBooksId?.trim();
 
-  if (firstGoogleBooksId && secondGoogleBooksId) {
-    return firstGoogleBooksId === secondGoogleBooksId;
-  }
-
-  const firstIsbns = [
-    normalizeBookIdentifier(first.isbn13),
-    normalizeBookIdentifier(first.isbn10),
-  ].filter(Boolean);
-  const secondIsbns = new Set(
-    [
-      normalizeBookIdentifier(second.isbn13),
-      normalizeBookIdentifier(second.isbn10),
-    ].filter(Boolean),
-  );
-
-  if (firstIsbns.some((isbn) => secondIsbns.has(isbn))) {
+  if (
+    firstGoogleBooksId &&
+    secondGoogleBooksId &&
+    firstGoogleBooksId === secondGoogleBooksId
+  ) {
     return true;
   }
 
-  const firstTitle = normalizeBookIdentityText(first.title);
-  const secondTitle = normalizeBookIdentityText(second.title);
-  const firstAuthor = normalizeBookIdentityText(first.author);
-  const secondAuthor = normalizeBookIdentityText(second.author);
+  const firstIsbns = getComparableBookIsbns(first);
+  const secondIsbns = getComparableBookIsbns(second);
 
-  return Boolean(
-    firstTitle &&
-      secondTitle &&
-      firstAuthor &&
-      secondAuthor &&
-      firstTitle === secondTitle &&
-      firstAuthor === secondAuthor,
-  );
+  if ([...firstIsbns].some((isbn) => secondIsbns.has(isbn))) {
+    return true;
+  }
+
+  if (areBooksWorkCompatible(first, second)) {
+    return true;
+  }
+
+  return false;
 }
 
 function mergeCompletedBookReview(
@@ -1067,10 +1226,15 @@ export default function HomeScreen() {
   const [savingAction, setSavingAction] = useState<SavingAction>(null);
   const [selectedManualBookMetadata, setSelectedManualBookMetadata] =
     useState<BookMetadata | null>(null);
+  const [manualBookSearchGroup, setManualBookSearchGroup] =
+    useState<BookSearchGroup | null>(null);
+  const manualBookCoverCandidates = getUniqueUsableCoverCandidates(
+    manualBookSearchGroup?.coverCandidates ?? [],
+  );
   const [isManualBookLookupRequested, setIsManualBookLookupRequested] =
     useState(false);
   const [manualBookLookupResults, setManualBookLookupResults] = useState<
-    BookMetadata[]
+    BookSearchGroup[]
   >([]);
   const [isManualBookLookupLoading, setIsManualBookLookupLoading] =
     useState(false);
@@ -1082,22 +1246,38 @@ export default function HomeScreen() {
   const [preSessionBook, setPreSessionBook] = useState<BookMetadata | null>(
     null,
   );
+  const [preSessionBookSearchGroup, setPreSessionBookSearchGroup] =
+    useState<BookSearchGroup | null>(null);
+  const preSessionBookCoverCandidates = getUniqueUsableCoverCandidates(
+    preSessionBookSearchGroup?.coverCandidates ?? [],
+  );
   const [activeSessionSelectedBook, setActiveSessionSelectedBook] =
     useState<BookMetadata | null>(null);
   const [isPreSessionBookChooserVisible, setIsPreSessionBookChooserVisible] =
     useState(false);
   const [preSessionBookQuery, setPreSessionBookQuery] = useState("");
   const [preSessionBookSearchResults, setPreSessionBookSearchResults] =
-    useState<BookMetadata[]>([]);
+    useState<BookSearchGroup[]>([]);
   const [isPreSessionBookSearchLoading, setIsPreSessionBookSearchLoading] =
     useState(false);
   const [hasPreSessionBookSearchSearched, setHasPreSessionBookSearchSearched] =
     useState(false);
   const [preSessionBookSearchError, setPreSessionBookSearchError] =
     useState(false);
-  const [bookLookupResults, setBookLookupResults] = useState<BookMetadata[]>([]);
+  const [bookLookupResults, setBookLookupResults] = useState<BookSearchGroup[]>(
+    [],
+  );
   const [selectedBookMetadata, setSelectedBookMetadata] =
     useState<BookMetadata | null>(null);
+  const [postSessionBookSearchGroup, setPostSessionBookSearchGroup] =
+    useState<BookSearchGroup | null>(null);
+  const postSessionBookCoverCandidates = getUniqueUsableCoverCandidates(
+    postSessionBookSearchGroup?.coverCandidates ?? [],
+  );
+  const [coverChooser, setCoverChooser] = useState<CoverChooserState | null>(
+    null,
+  );
+  const [failedCoverUrls, setFailedCoverUrls] = useState<string[]>([]);
   const [isBookLookupLoading, setIsBookLookupLoading] = useState(false);
   const [isBookLookupRequested, setIsBookLookupRequested] = useState(false);
   const [hasBookLookupSearched, setHasBookLookupSearched] = useState(false);
@@ -1118,6 +1298,12 @@ export default function HomeScreen() {
   const [reduceMotionEnabled, setReduceMotionEnabled] = useState(false);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const knownBookCoverDiscoveryRequestIds = useRef<
+    Record<CoverChooserTarget, number>
+  >({ preSession: 0, postSession: 0, manualLog: 0 });
+  const knownBookCoverDiscoverySelectionKeys = useRef<
+    Record<CoverChooserTarget, string | null>
+  >({ preSession: null, postSession: null, manualLog: null });
   const isStartingSessionRef = useRef(false);
   const isEndingSessionRef = useRef(false);
   const homeEntryOpacity = useRef(new Animated.Value(1)).current;
@@ -1273,6 +1459,11 @@ export default function HomeScreen() {
           screen === "finishedBooks" ||
           screen === "manualLog"
         ) {
+          if (screen === "manualLog") {
+            knownBookCoverDiscoveryRequestIds.current.manualLog += 1;
+            knownBookCoverDiscoverySelectionKeys.current.manualLog = null;
+            setManualBookSearchGroup(null);
+          }
           setScreen(libraryReturnTarget === "menu" ? "menu" : "home");
           return true;
         }
@@ -1286,6 +1477,8 @@ export default function HomeScreen() {
         }
 
         if (screen === "bookInput") {
+          knownBookCoverDiscoveryRequestIds.current.postSession += 1;
+          knownBookCoverDiscoverySelectionKeys.current.postSession = null;
           Keyboard.dismiss();
           void clearPendingPostSessionDraft();
           setPendingPostSessionId(null);
@@ -1295,6 +1488,8 @@ export default function HomeScreen() {
           setCompletedBookReview("");
           setShowBookCompletedInput(false);
           setSelectedBookMetadata(null);
+          setPostSessionBookSearchGroup(null);
+          setCoverChooser(null);
           setScreen("home");
           return true;
         }
@@ -1358,6 +1553,10 @@ export default function HomeScreen() {
       setCompletedBookReviewError(null);
       setBookInputError(null);
       setSelectedBookMetadata(null);
+      knownBookCoverDiscoveryRequestIds.current.postSession += 1;
+      knownBookCoverDiscoverySelectionKeys.current.postSession = null;
+      setPostSessionBookSearchGroup(null);
+      setCoverChooser(null);
       setBookLookupResults([]);
       setBookLookupError(false);
       setIsBookLookupRequested(false);
@@ -1473,9 +1672,9 @@ export default function HomeScreen() {
 
     const lookupTimer = setTimeout(async () => {
       try {
-        const results = await Promise.race<BookMetadata[]>([
+        const results = await Promise.race<BookSearchGroup[]>([
           searchGoogleBooks(trimmedQuery),
-          new Promise<BookMetadata[]>((_, reject) =>
+          new Promise<BookSearchGroup[]>((_, reject) =>
             setTimeout(
               () => reject(new Error("Book lookup timed out")),
               BOOK_LOOKUP_TIMEOUT_MS,
@@ -1559,9 +1758,9 @@ export default function HomeScreen() {
 
     const lookupTimer = setTimeout(async () => {
       try {
-        const results = await Promise.race<BookMetadata[]>([
+        const results = await Promise.race<BookSearchGroup[]>([
           searchGoogleBooks(trimmedQuery),
-          new Promise<BookMetadata[]>((_, reject) =>
+          new Promise<BookSearchGroup[]>((_, reject) =>
             setTimeout(
               () => reject(new Error("Book lookup timed out")),
               BOOK_LOOKUP_TIMEOUT_MS,
@@ -2074,6 +2273,7 @@ export default function HomeScreen() {
                 setActiveSessionSelectedBook(restoredActiveSessionBook);
                 if (restoredActiveSessionBook) {
                   setPreSessionBook(restoredActiveSessionBook);
+                  setPreSessionBookSearchGroup(null);
                 }
               } catch (error) {
                 warnInDev(
@@ -2122,6 +2322,7 @@ export default function HomeScreen() {
           setSelectedBookMetadata(
             pendingDraftToRestore.selectedBookMetadata ?? null,
           );
+          setPostSessionBookSearchGroup(null);
           setBookInputError(null);
           setCompletedBookReviewError(null);
           setHasUserEditedBookQuery(false);
@@ -2272,6 +2473,7 @@ export default function HomeScreen() {
     );
 
     if (!isReading) {
+      invalidateKnownBookCoverDiscovery("preSession");
       isStartingSessionRef.current = true;
       setIsEnteringReading(true);
 
@@ -2318,6 +2520,9 @@ export default function HomeScreen() {
       setCompletedBookMoment(null);
       setBookTitle(selectedBookAtStart?.title ?? "");
       setSelectedBookMetadata(selectedBookAtStart);
+      setPostSessionBookSearchGroup(
+        selectedBookAtStart ? preSessionBookSearchGroup : null,
+      );
       setHasUserEditedBookQuery(false);
       setShowBookCompletedInput(false);
       setCompletedBookReview("");
@@ -2444,6 +2649,9 @@ export default function HomeScreen() {
         setPendingSessionStartedWithSelectedBook(startedWithSelectedBook);
         setBookTitle(selectedBookFromStart?.title ?? "");
         setSelectedBookMetadata(selectedBookFromStart);
+        setPostSessionBookSearchGroup(
+          selectedBookFromStart ? preSessionBookSearchGroup : null,
+        );
         setHasUserEditedBookQuery(false);
         setIsBookLookupRequested(false);
         setSessionMessage(null);
@@ -2478,6 +2686,66 @@ export default function HomeScreen() {
     }
   };
 
+  const invalidateKnownBookCoverDiscovery = (
+    target: CoverChooserTarget,
+  ) => {
+    knownBookCoverDiscoveryRequestIds.current[target] += 1;
+    knownBookCoverDiscoverySelectionKeys.current[target] = null;
+  };
+
+  const discoverKnownBookCovers = (
+    target: CoverChooserTarget,
+    metadata: BookMetadata | null,
+  ) => {
+    invalidateKnownBookCoverDiscovery(target);
+    setFailedCoverUrls([]);
+
+    if (target === "preSession") {
+      setPreSessionBookSearchGroup(null);
+    } else if (target === "postSession") {
+      setPostSessionBookSearchGroup(null);
+    } else {
+      setManualBookSearchGroup(null);
+    }
+
+    if (!metadata) return;
+
+    const descriptor = getKnownBookCoverDiscoveryDescriptor(metadata);
+
+    if (!descriptor) return;
+
+    const requestId = knownBookCoverDiscoveryRequestIds.current[target];
+    knownBookCoverDiscoverySelectionKeys.current[target] =
+      descriptor.selectionKey;
+
+    void (async () => {
+      const groups = await searchGoogleBooks(descriptor.query);
+
+      if (
+        !isKnownBookCoverDiscoveryCurrent(
+          knownBookCoverDiscoveryRequestIds.current[target],
+          knownBookCoverDiscoverySelectionKeys.current[target],
+          requestId,
+          descriptor.selectionKey,
+        )
+      ) {
+        return;
+      }
+
+      const matchedGroup = findKnownBookCoverSearchGroup(metadata, groups);
+
+      if (!matchedGroup) return;
+
+      if (target === "preSession") {
+        setPreSessionBookSearchGroup(matchedGroup);
+      } else if (target === "postSession") {
+        setPostSessionBookSearchGroup(matchedGroup);
+      } else {
+        setManualBookSearchGroup(matchedGroup);
+      }
+    })();
+  };
+
   const handleBookTitleChange = (nextTitle: string) => {
     setBookInputError(null);
     setHasUserEditedBookQuery(true);
@@ -2485,18 +2753,24 @@ export default function HomeScreen() {
     setBookTitle(nextTitle);
 
     if (selectedBookMetadata && nextTitle.trim() !== selectedBookMetadata.title) {
+      invalidateKnownBookCoverDiscovery("postSession");
       setSelectedBookMetadata(null);
+      setPostSessionBookSearchGroup(null);
+      setCoverChooser(null);
       lastAutoScrolledBookLookupQuery.current = null;
     }
   };
 
   const clearBookTitleSelection = () => {
+    invalidateKnownBookCoverDiscovery("postSession");
     bookLookupRequestId.current += 1;
     setBookInputError(null);
     setHasUserEditedBookQuery(true);
     setIsBookLookupRequested(true);
     setBookTitle("");
     setSelectedBookMetadata(null);
+    setPostSessionBookSearchGroup(null);
+    setCoverChooser(null);
     lastAutoScrolledBookLookupQuery.current = null;
     setBookLookupResults([]);
     setIsBookLookupLoading(false);
@@ -2506,22 +2780,35 @@ export default function HomeScreen() {
     setTimeout(() => bookTitleInputRef.current?.focus(), 0);
   };
 
-  const selectGoogleBook = (book: BookMetadata) => {
+  const selectGoogleBook = (group: BookSearchGroup) => {
+    const selection = getGoogleBookSelection(group);
+
+    invalidateKnownBookCoverDiscovery("postSession");
     Keyboard.dismiss();
     bookLookupRequestId.current += 1;
     setBookInputError(null);
     setHasUserEditedBookQuery(false);
     setIsBookLookupRequested(false);
-    setSelectedBookMetadata({
-      ...book,
-      coverUrl: normalizeStoredCoverUrl(book.coverUrl),
-    });
-    setBookTitle(book.title);
+    setSelectedBookMetadata(selection.metadata);
+    setPostSessionBookSearchGroup(selection.searchGroup);
+    setFailedCoverUrls([]);
+    setBookTitle(selection.metadata.title);
     setBookLookupResults([]);
     setIsBookLookupLoading(false);
     setHasBookLookupSearched(false);
     setBookLookupError(false);
-    lastAutoScrolledBookLookupQuery.current = book.title.trim();
+    lastAutoScrolledBookLookupQuery.current = selection.metadata.title.trim();
+  };
+
+  const selectKnownPostSessionBook = (metadata: BookMetadata) => {
+    Keyboard.dismiss();
+    handleBookTitleChange(metadata.title);
+    setHasUserEditedBookQuery(false);
+    setIsBookLookupRequested(false);
+    setBookLookupResults([]);
+    setSelectedBookMetadata(metadata);
+    setCoverChooser(null);
+    discoverKnownBookCovers("postSession", metadata);
   };
 
   const resetManualBookLookup = () => {
@@ -2560,9 +2847,9 @@ export default function HomeScreen() {
 
     manualBookLookupTimer.current = setTimeout(async () => {
       try {
-        const results = await Promise.race<BookMetadata[]>([
+        const results = await Promise.race<BookSearchGroup[]>([
           searchGoogleBooks(trimmedQuery),
-          new Promise<BookMetadata[]>((_, reject) =>
+          new Promise<BookSearchGroup[]>((_, reject) =>
             setTimeout(
               () => reject(new Error("Book lookup timed out")),
               BOOK_LOOKUP_TIMEOUT_MS,
@@ -2811,7 +3098,10 @@ export default function HomeScreen() {
       selectedManualBookMetadata &&
       trimmedTitle !== selectedManualBookMetadata.title
     ) {
+      invalidateKnownBookCoverDiscovery("manualLog");
       setSelectedManualBookMetadata(null);
+      setManualBookSearchGroup(null);
+      setCoverChooser(null);
     }
 
     const knownMetadata = trimmedTitle
@@ -2828,31 +3118,59 @@ export default function HomeScreen() {
   };
 
   const clearManualBookTitleSelection = () => {
+    invalidateKnownBookCoverDiscovery("manualLog");
     setIsManualBookLookupRequested(true);
     setManualLogBookTitle("");
     setSelectedManualBookMetadata(null);
+    setManualBookSearchGroup(null);
+    setCoverChooser(null);
     resetManualBookLookup();
     setTimeout(() => manualBookTitleInputRef.current?.focus(), 0);
   };
 
-  const selectManualGoogleBook = (book: BookMetadata) => {
-    setSelectedManualBookMetadata({
-      ...book,
-      coverUrl: normalizeStoredCoverUrl(book.coverUrl),
-    });
-    setManualLogBookTitle(book.title);
+  const selectManualGoogleBook = (group: BookSearchGroup) => {
+    const selection = getGoogleBookSelection(group);
+
+    invalidateKnownBookCoverDiscovery("manualLog");
+    setSelectedManualBookMetadata(selection.metadata);
+    setManualBookSearchGroup(selection.searchGroup);
+    setFailedCoverUrls([]);
+    setManualLogBookTitle(selection.metadata.title);
     setIsManualBookLookupRequested(false);
     resetManualBookLookup();
     Keyboard.dismiss();
   };
 
   const findKnownBookMetadataByTitle = (title: string): BookMetadata | null => {
-    const normalizedTitle = title.trim().toLowerCase();
-    const knownBook = [...recentSessions, ...completedBooks].find(
-      (book) =>
-        book.title.trim().toLowerCase() === normalizedTitle &&
-        hasReusableBookMetadata(book),
+    const normalizedTitle = normalizeWorkIdentityText(
+      getCanonicalBookTitle({ title }),
     );
+    const matchingKnownBooks = [...recentSessions, ...completedBooks].filter(
+      (book) => {
+        if (!hasReusableBookMetadata(book)) return false;
+
+        return (
+          getBookWorkIdentity({ title: book.title, author: book.author })
+            .normalizedTitle === normalizedTitle
+        );
+      },
+    );
+    const matchingWorkKeys = new Set(
+      matchingKnownBooks
+        .map(
+          (book) =>
+            getBookWorkIdentity({ title: book.title, author: book.author }).key,
+        )
+        .filter(Boolean),
+    );
+    const hasUnidentifiedMatch = matchingKnownBooks.some(
+      (book) =>
+        !getBookWorkIdentity({ title: book.title, author: book.author }).key,
+    );
+    const isAmbiguous =
+      matchingWorkKeys.size > 1 ||
+      (hasUnidentifiedMatch && matchingKnownBooks.length > 1);
+    const knownBook = isAmbiguous ? null : matchingKnownBooks[0];
 
     if (!knownBook) {
       return null;
@@ -2884,25 +3202,107 @@ export default function HomeScreen() {
     resetPreSessionBookSearch();
   };
 
-  const selectPreSessionBook = (book: BookMetadata) => {
+  const applyPreSessionBookSelection = (
+    book: BookMetadata,
+    searchGroup: BookSearchGroup | null,
+  ) => {
+    invalidateKnownBookCoverDiscovery("preSession");
     performHaptic(() => Haptics.selectionAsync());
     Keyboard.dismiss();
     setPreSessionBook({
       ...book,
       coverUrl: normalizeStoredCoverUrl(book.coverUrl),
     });
+    setPreSessionBookSearchGroup(searchGroup);
+    setFailedCoverUrls([]);
+    setCoverChooser(null);
     setIsPreSessionBookChooserVisible(false);
     resetPreSessionBookSearch();
   };
 
+  const selectPreSessionGoogleBook = (group: BookSearchGroup) => {
+    const selection = getGoogleBookSelection(group);
+    applyPreSessionBookSelection(selection.metadata, selection.searchGroup);
+  };
+
+  const selectKnownPreSessionBook = (book: BookMetadata) => {
+    applyPreSessionBookSelection(book, null);
+    discoverKnownBookCovers("preSession", book);
+  };
+
   const clearPreSessionBook = () => {
+    invalidateKnownBookCoverDiscovery("preSession");
     performHaptic(() => Haptics.selectionAsync());
     Keyboard.dismiss();
     setPreSessionBook(null);
+    setPreSessionBookSearchGroup(null);
+    setCoverChooser(null);
     setCurrentBookTitle("");
     setIsPreSessionBookChooserVisible(false);
     resetPreSessionBookSearch();
     void AsyncStorage.removeItem(CURRENT_BOOK_KEY);
+  };
+
+  const openCoverChooser = (
+    target: CoverChooserTarget,
+    metadata: BookMetadata | null,
+    candidates: GoogleBookCoverCandidate[],
+  ) => {
+    const coverCandidates = getUniqueUsableCoverCandidates(candidates);
+
+    if (!metadata || coverCandidates.length <= 1) {
+      return;
+    }
+
+    performHaptic(() => Haptics.selectionAsync());
+    Keyboard.dismiss();
+    setFailedCoverUrls([]);
+    setCoverChooser({
+      target,
+      bookTitle: metadata.title,
+      selectedCoverUrl: normalizeStoredCoverUrl(metadata.coverUrl),
+      coverCandidates,
+    });
+  };
+
+  const closeCoverChooser = () => {
+    setCoverChooser(null);
+  };
+
+  const chooseCover = (candidate: GoogleBookCoverCandidate) => {
+    if (!coverChooser) return;
+
+    const candidateUrl = normalizeStoredCoverUrl(candidate.url)?.trim();
+    const isAvailableCandidate = coverChooser.coverCandidates.some(
+      (availableCandidate) => availableCandidate.url === candidateUrl,
+    );
+
+    if (!candidateUrl || !isAvailableCandidate) return;
+
+    if (coverChooser.target === "preSession") {
+      setPreSessionBook((metadata) =>
+        metadata ? selectBookMetadataCover(metadata, candidateUrl) : metadata,
+      );
+    } else if (coverChooser.target === "postSession") {
+      setSelectedBookMetadata((metadata) =>
+        metadata ? selectBookMetadataCover(metadata, candidateUrl) : metadata,
+      );
+    } else {
+      setSelectedManualBookMetadata((metadata) =>
+        metadata ? selectBookMetadataCover(metadata, candidateUrl) : metadata,
+      );
+    }
+
+    performHaptic(() => Haptics.selectionAsync());
+    closeCoverChooser();
+  };
+
+  const markCoverAsFailed = (coverUrl: string) => {
+    setFailedCoverUrls((failedUrls) =>
+      failedUrls.includes(coverUrl)
+        ? failedUrls
+        : [...failedUrls, coverUrl],
+    );
   };
 
   const saveSession = async (
@@ -2989,6 +3389,7 @@ export default function HomeScreen() {
 
     if (!beginSavingAction(savingAction)) return;
 
+    invalidateKnownBookCoverDiscovery("postSession");
     setBookInputError(null);
 
     try {
@@ -3067,6 +3468,7 @@ export default function HomeScreen() {
       if (shouldCompleteBook) {
         setCurrentBookTitle("");
         setPreSessionBook(null);
+        setPreSessionBookSearchGroup(null);
         await AsyncStorage.removeItem(CURRENT_BOOK_KEY);
       } else if (validBookTitle) {
         setCurrentBookTitle(validBookTitle);
@@ -3075,6 +3477,9 @@ export default function HomeScreen() {
             title: validBookTitle,
             source: "manual",
           },
+        );
+        setPreSessionBookSearchGroup(
+          selectedMetadata ? postSessionBookSearchGroup : null,
         );
         await AsyncStorage.setItem(CURRENT_BOOK_KEY, validBookTitle);
       }
@@ -3092,6 +3497,8 @@ export default function HomeScreen() {
       setPendingSessionSeconds(0);
       setPendingSessionStartedWithSelectedBook(false);
       setSelectedBookMetadata(null);
+      setPostSessionBookSearchGroup(null);
+      setCoverChooser(null);
       setHasUserEditedBookQuery(false);
       setBookLookupResults([]);
       setBookLookupError(false);
@@ -3115,6 +3522,7 @@ export default function HomeScreen() {
   const skipBookForSession = async () => {
     if (!beginSavingAction("bookInputSkip")) return;
 
+    invalidateKnownBookCoverDiscovery("postSession");
     setBookInputError(null);
 
     try {
@@ -3133,6 +3541,8 @@ export default function HomeScreen() {
       setPendingSessionStartedWithSelectedBook(false);
       setCompletedBookReview("");
       setSelectedBookMetadata(null);
+      setPostSessionBookSearchGroup(null);
+      setCoverChooser(null);
       setHasUserEditedBookQuery(false);
       setBookLookupResults([]);
       setBookLookupError(false);
@@ -3473,6 +3883,9 @@ export default function HomeScreen() {
   };
 
   const eraseAllReadingData = async () => {
+    invalidateKnownBookCoverDiscovery("preSession");
+    invalidateKnownBookCoverDiscovery("postSession");
+    invalidateKnownBookCoverDiscovery("manualLog");
     await AsyncStorage.multiRemove([...READING_DATA_KEYS]);
 
     setIsReading(false);
@@ -3487,6 +3900,7 @@ export default function HomeScreen() {
     setPendingSessionStartedWithSelectedBook(false);
     setCurrentBookTitle("");
     setPreSessionBook(null);
+    setPreSessionBookSearchGroup(null);
     setActiveSessionSelectedBook(null);
     setRecentSessions([]);
     setTotalCompletedSessions(0);
@@ -3498,6 +3912,9 @@ export default function HomeScreen() {
     setCompletedBookReview("");
     setBookTitle("");
     setSelectedBookMetadata(null);
+    setPostSessionBookSearchGroup(null);
+    setManualBookSearchGroup(null);
+    setCoverChooser(null);
     setScreen("home");
     setSessionMessage("Your reading data was erased");
     setTimeout(() => setSessionMessage(null), 3500);
@@ -3519,6 +3936,10 @@ export default function HomeScreen() {
   };
 
   const openManualLog = async () => {
+    const knownCurrentBook = currentBookTitle
+      ? findKnownBookMetadataByTitle(currentBookTitle)
+      : null;
+
     performHaptic(() =>
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
     );
@@ -3528,13 +3949,15 @@ export default function HomeScreen() {
     setManualLogNote("");
     setManualLogError(null);
     setCompletedBookReviewError(null);
-    setSelectedManualBookMetadata(null);
+    setSelectedManualBookMetadata(knownCurrentBook);
+    setCoverChooser(null);
     setIsManualBookLookupRequested(false);
     resetManualBookLookup();
     setSanctuaryReveal(null);
     setCompletedBookMoment(null);
     setSessionMessage(null);
     setScreen("manualLog");
+    discoverKnownBookCovers("manualLog", knownCurrentBook);
   };
 
   const openFeedbackEmail = async () => {
@@ -3591,6 +4014,7 @@ export default function HomeScreen() {
   };
 
   const cancelManualLog = async () => {
+    invalidateKnownBookCoverDiscovery("manualLog");
     performHaptic(() =>
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light),
     );
@@ -3600,6 +4024,8 @@ export default function HomeScreen() {
     setManualLogNote("");
     setManualLogError(null);
     setSelectedManualBookMetadata(null);
+    setManualBookSearchGroup(null);
+    setCoverChooser(null);
     setIsManualBookLookupRequested(false);
     setManualBookTitleFocused(false);
     manualLogNoteFocusedRef.current = false;
@@ -3691,6 +4117,8 @@ export default function HomeScreen() {
 
     if (!beginSavingAction("manualLog")) return;
 
+    invalidateKnownBookCoverDiscovery("manualLog");
+
     try {
       await persistTodayDateIfNeeded();
       await AsyncStorage.multiSet(storageUpdates);
@@ -3721,7 +4149,13 @@ export default function HomeScreen() {
           source: "manual",
         },
       );
+      setPreSessionBookSearchGroup(
+        selectedManualMetadata ? manualBookSearchGroup : null,
+      );
     }
+
+    setManualBookSearchGroup(null);
+    setCoverChooser(null);
 
     setScreen("reveal");
 
@@ -3861,6 +4295,113 @@ export default function HomeScreen() {
     libraryReturnTarget === "menu" ? "menu" : "home";
   const libraryReturnLabel =
     libraryReturnTarget === "menu" ? "Back to menu" : "Return home";
+  const coverChooserModal = coverChooser ? (
+    <Modal
+      visible
+      transparent
+      animationType="fade"
+      onRequestClose={closeCoverChooser}
+    >
+      <Pressable
+        style={styles.coverChooserBackdrop}
+        onPress={closeCoverChooser}
+      >
+        <Pressable
+          accessibilityViewIsModal
+          accessibilityLabel={`Choose a cover for ${coverChooser.bookTitle}`}
+          style={styles.coverChooserSheet}
+          onPress={(event) => event.stopPropagation()}
+        >
+          <View style={styles.coverChooserHandle} />
+          <View style={styles.coverChooserHeader}>
+            <View style={styles.coverChooserHeaderCopy}>
+              <ThemedText style={styles.coverChooserTitle}>
+                Choose a cover
+              </ThemedText>
+              <ThemedText
+                style={styles.coverChooserBookTitle}
+                numberOfLines={2}
+              >
+                {coverChooser.bookTitle}
+              </ThemedText>
+            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Close cover chooser"
+              hitSlop={8}
+              style={({ pressed }) => [
+                styles.coverChooserCloseButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={closeCoverChooser}
+            >
+              <Ionicons
+                name="close"
+                size={19}
+                color="rgba(47,93,80,0.68)"
+              />
+            </Pressable>
+          </View>
+          <ThemedText style={styles.coverChooserHelper}>
+            Your book and reading history stay the same.
+          </ThemedText>
+          <ScrollView
+            style={styles.coverChooserScroll}
+            contentContainerStyle={styles.coverChooserGrid}
+            showsVerticalScrollIndicator={false}
+          >
+            {coverChooser.coverCandidates.map((candidate, index) => {
+              const isSelected =
+                candidate.url === coverChooser.selectedCoverUrl;
+              const hasFailed = failedCoverUrls.includes(candidate.url);
+
+              return (
+                <Pressable
+                  key={candidate.url}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: isSelected }}
+                  accessibilityLabel={`${
+                    isSelected ? "Selected cover" : "Cover"
+                  }, option ${index + 1} of ${coverChooser.coverCandidates.length}`}
+                  accessibilityHint={
+                    isSelected
+                      ? "This is the current cover"
+                      : "Select this cover without changing the book"
+                  }
+                  style={({ pressed }) => [
+                    styles.coverChooserOption,
+                    isSelected && styles.coverChooserOptionSelected,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={() => chooseCover(candidate)}
+                >
+                  <View style={styles.coverChooserImageFrame}>
+                    {hasFailed ? (
+                      <ThemedText style={styles.coverChooserFallback}>
+                        R
+                      </ThemedText>
+                    ) : (
+                      <Image
+                        source={{ uri: candidate.url }}
+                        style={styles.coverChooserImage}
+                        resizeMode="cover"
+                        onError={() => markCoverAsFailed(candidate.url)}
+                      />
+                    )}
+                    {isSelected ? (
+                      <View style={styles.coverChooserSelectedBadge}>
+                        <Ionicons name="checkmark" size={13} color="#FFFFFF" />
+                      </View>
+                    ) : null}
+                  </View>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  ) : null;
 
   switch (screen) {
     case "loading":
@@ -4169,10 +4710,13 @@ export default function HomeScreen() {
         !selectedBookMetadata &&
         bookTitle.trim().length === 0;
       const beginBookAttributionSearch = () => {
+        invalidateKnownBookCoverDiscovery("postSession");
         Keyboard.dismiss();
         bookLookupRequestId.current += 1;
         setBookInputError(null);
         setSelectedBookMetadata(null);
+        setPostSessionBookSearchGroup(null);
+        setCoverChooser(null);
         setBookTitle("");
         setHasUserEditedBookQuery(true);
         setIsBookLookupRequested(true);
@@ -4268,6 +4812,7 @@ export default function HomeScreen() {
       );
 
       return (
+      <>
       <ThemedView
         style={[styles.bookReturnScreen, { paddingTop: insets.top + 32 }]}
       >
@@ -4378,11 +4923,15 @@ export default function HomeScreen() {
                 <View style={styles.bookAttributionReviewCard}>
                   <View style={styles.bookAttributionReviewTopRow}>
                     <View style={styles.bookAttributionReviewCover}>
-                      {attributionPreviewCoverUrl ? (
+                      {attributionPreviewCoverUrl &&
+                      !failedCoverUrls.includes(attributionPreviewCoverUrl) ? (
                         <Image
                           source={{ uri: attributionPreviewCoverUrl }}
                           style={styles.bookAttributionCoverImage}
                           resizeMode="cover"
+                          onError={() =>
+                            markCoverAsFailed(attributionPreviewCoverUrl)
+                          }
                         />
                       ) : (
                         <ThemedText
@@ -4407,6 +4956,30 @@ export default function HomeScreen() {
                         >
                           {attributionPreviewMetadata.author}
                         </ThemedText>
+                      ) : null}
+                      {selectedBookMetadata &&
+                      postSessionBookCoverCandidates.length > 1 ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Change cover"
+                          accessibilityHint="Choose another cover for this book"
+                          hitSlop={8}
+                          style={({ pressed }) => [
+                            styles.bookCoverChangeButton,
+                            pressed && styles.buttonPressed,
+                          ]}
+                          onPress={() =>
+                            openCoverChooser(
+                              "postSession",
+                              selectedBookMetadata,
+                              postSessionBookCoverCandidates,
+                            )
+                          }
+                        >
+                          <ThemedText style={styles.bookCoverChangeButtonText}>
+                            Change cover
+                          </ThemedText>
+                        </Pressable>
                       ) : null}
                       <Pressable
                         accessibilityRole="button"
@@ -4494,7 +5067,7 @@ export default function HomeScreen() {
                         styles.bookLookupTitleAttribution,
                       ]}
                     >
-                      Possible editions
+                      Possible books
                     </ThemedText>
                     {isBookLookupLoading ? (
                       <ThemedText
@@ -4514,7 +5087,7 @@ export default function HomeScreen() {
                         styles.bookLookupHelperTextAttribution,
                       ]}
                     >
-                      Choose the edition you read, or keep your typed title.
+                      Choose a book, or keep your typed title.
                     </ThemedText>
                   ) : null}
 
@@ -4616,14 +5189,12 @@ export default function HomeScreen() {
                           pressed && styles.buttonPressed,
                         ]}
                         onPress={() => {
-                          Keyboard.dismiss();
-                          handleBookTitleChange(session.title);
-                          setHasUserEditedBookQuery(false);
-                          setIsBookLookupRequested(false);
-                          setBookLookupResults([]);
-                          setSelectedBookMetadata(
-                            findKnownBookMetadataByTitle(session.title),
-                          );
+                          const metadata =
+                            findKnownBookMetadataByTitle(session.title);
+
+                          if (metadata) {
+                            selectKnownPostSessionBook(metadata);
+                          }
                         }}
                       >
                         <View style={styles.recentBookMiniCover}>
@@ -4730,11 +5301,15 @@ export default function HomeScreen() {
               >
                 <View style={styles.bookAttributionReviewTopRow}>
                   <View style={styles.bookAttributionReviewCover}>
-                    {attributionPreviewCoverUrl ? (
+                    {attributionPreviewCoverUrl &&
+                    !failedCoverUrls.includes(attributionPreviewCoverUrl) ? (
                       <Image
                         source={{ uri: attributionPreviewCoverUrl }}
                         style={styles.bookAttributionCoverImage}
                         resizeMode="cover"
+                        onError={() =>
+                          markCoverAsFailed(attributionPreviewCoverUrl)
+                        }
                       />
                     ) : (
                       <ThemedText
@@ -4763,6 +5338,30 @@ export default function HomeScreen() {
                     <ThemedText style={styles.bookAttributionSelectedText}>
                       {attributionStatusText}
                     </ThemedText>
+                    {selectedBookMetadata &&
+                    postSessionBookCoverCandidates.length > 1 ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Change cover"
+                        accessibilityHint="Choose another cover for this book"
+                        hitSlop={8}
+                        style={({ pressed }) => [
+                          styles.bookCoverChangeButton,
+                          pressed && styles.buttonPressed,
+                        ]}
+                        onPress={() =>
+                          openCoverChooser(
+                            "postSession",
+                            selectedBookMetadata,
+                            postSessionBookCoverCandidates,
+                          )
+                        }
+                      >
+                        <ThemedText style={styles.bookCoverChangeButtonText}>
+                          Change cover
+                        </ThemedText>
+                      </Pressable>
+                    ) : null}
                     {shouldShowBypassedBookChange ? (
                       <Pressable
                         accessibilityRole="button"
@@ -4891,6 +5490,8 @@ export default function HomeScreen() {
         </KeyboardAvoidingView>
         </Animated.View>
       </ThemedView>
+      {coverChooserModal}
+      </>
     );
     }
 
@@ -4937,6 +5538,7 @@ export default function HomeScreen() {
       );
 
       return (
+      <>
       <ThemedView
         style={[
           styles.closeSessionScreen,
@@ -5077,11 +5679,15 @@ export default function HomeScreen() {
           {manualSettledBookMetadata ? (
             <View style={styles.manualBookIdentityCard}>
               <View style={styles.manualBookIdentityCover}>
-                {manualSettledBookCoverUrl ? (
+                {manualSettledBookCoverUrl &&
+                !failedCoverUrls.includes(manualSettledBookCoverUrl) ? (
                   <Image
                     source={{ uri: manualSettledBookCoverUrl }}
                     style={styles.manualBookIdentityCoverImage}
                     resizeMode="cover"
+                    onError={() =>
+                      markCoverAsFailed(manualSettledBookCoverUrl)
+                    }
                   />
                 ) : (
                   <ThemedText style={styles.manualBookIdentityCoverFallback}>
@@ -5105,20 +5711,46 @@ export default function HomeScreen() {
                   </ThemedText>
                 ) : null}
               </View>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Change book"
-                hitSlop={8}
-                style={({ pressed }) => [
-                  styles.manualBookIdentityChange,
-                  pressed && styles.buttonPressed,
-                ]}
-                onPress={clearManualBookTitleSelection}
-              >
-                <ThemedText style={styles.manualBookIdentityChangeText}>
-                  Change
-                </ThemedText>
-              </Pressable>
+              <View style={styles.manualBookIdentityActions}>
+                {selectedManualBookMetadata &&
+                manualBookCoverCandidates.length > 1 ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Change cover"
+                    accessibilityHint="Choose another cover for this book"
+                    hitSlop={8}
+                    style={({ pressed }) => [
+                      styles.manualBookIdentityChange,
+                      pressed && styles.buttonPressed,
+                    ]}
+                    onPress={() =>
+                      openCoverChooser(
+                        "manualLog",
+                        selectedManualBookMetadata,
+                        manualBookCoverCandidates,
+                      )
+                    }
+                  >
+                    <ThemedText style={styles.manualBookIdentityChangeText}>
+                      Change cover
+                    </ThemedText>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Change book"
+                  hitSlop={8}
+                  style={({ pressed }) => [
+                    styles.manualBookIdentityChange,
+                    pressed && styles.buttonPressed,
+                  ]}
+                  onPress={clearManualBookTitleSelection}
+                >
+                  <ThemedText style={styles.manualBookIdentityChangeText}>
+                    Change
+                  </ThemedText>
+                </Pressable>
+              </View>
             </View>
           ) : (
             <View
@@ -5378,6 +6010,8 @@ export default function HomeScreen() {
           </InputAccessoryView>
         ) : null}
       </ThemedView>
+      {coverChooserModal}
+      </>
     );
     }
 
@@ -6592,11 +7226,13 @@ export default function HomeScreen() {
               ]}
             >
               <View style={styles.preSessionReadingCameo}>
-                {preSessionBookCoverUrl ? (
+                {preSessionBookCoverUrl &&
+                !failedCoverUrls.includes(preSessionBookCoverUrl) ? (
                   <Image
                     source={{ uri: preSessionBookCoverUrl }}
                     style={styles.preSessionReadingCameoImage}
                     resizeMode="cover"
+                    onError={() => markCoverAsFailed(preSessionBookCoverUrl)}
                   />
                 ) : (
                   <ThemedText style={styles.preSessionReadingCameoMark}>
@@ -6659,6 +7295,34 @@ export default function HomeScreen() {
               </View>
             )}
           </Pressable>
+          {preSessionBook && preSessionBookCoverCandidates.length > 1 ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Change cover"
+              accessibilityHint="Choose another cover for this book"
+              hitSlop={8}
+              style={({ pressed }) => [
+                styles.preSessionCoverChangeButton,
+                pressed && styles.buttonPressed,
+              ]}
+              onPress={() =>
+                openCoverChooser(
+                  "preSession",
+                  preSessionBook,
+                  preSessionBookCoverCandidates,
+                )
+              }
+            >
+              <Ionicons
+                name="images-outline"
+                size={14}
+                color="rgba(47,93,80,0.62)"
+              />
+              <ThemedText style={styles.preSessionCoverChangeButtonText}>
+                Change cover
+              </ThemedText>
+            </Pressable>
+          ) : null}
         </View>
 
         <Pressable
@@ -6898,7 +7562,7 @@ export default function HomeScreen() {
                             styles.preSessionBookChoice,
                             pressed && styles.buttonPressed,
                           ]}
-                          onPress={() => selectPreSessionBook(book)}
+                          onPress={() => selectPreSessionGoogleBook(book)}
                         >
                           <View style={styles.preSessionBookCover}>
                             {coverUrl ? (
@@ -6960,7 +7624,7 @@ export default function HomeScreen() {
                           isSelected && styles.preSessionBookChoiceSelected,
                           pressed && styles.buttonPressed,
                         ]}
-                        onPress={() => selectPreSessionBook(book)}
+                        onPress={() => selectKnownPreSessionBook(book)}
                       >
                         <View style={styles.preSessionBookCover}>
                           {coverUrl ? (
@@ -7029,6 +7693,7 @@ export default function HomeScreen() {
         </Pressable>
       </KeyboardAvoidingView>
     </Modal>
+    {coverChooserModal}
     </>
       );
   }
@@ -7997,6 +8662,23 @@ const styles = StyleSheet.create({
   homeReadingSelectorWrapEmpty: {
     marginBottom: 4,
   },
+  preSessionCoverChangeButton: {
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    marginTop: -4,
+    borderRadius: 999,
+    backgroundColor: "rgba(47,93,80,0.055)",
+  },
+  preSessionCoverChangeButtonText: {
+    ...typography.role.button,
+    color: "rgba(47,93,80,0.68)",
+    fontSize: 12,
+    lineHeight: 17,
+  },
   preSessionReadingEyebrow: {
     ...typography.role.metadata,
     color: "rgba(47,93,80,0.52)",
@@ -8447,6 +9129,134 @@ const styles = StyleSheet.create({
     color: "rgba(47,93,80,0.66)",
     fontSize: 14,
     lineHeight: 20,
+  },
+  coverChooserBackdrop: {
+    flex: 1,
+    justifyContent: "flex-end",
+    backgroundColor: "rgba(25,38,32,0.34)",
+  },
+  coverChooserSheet: {
+    maxHeight: "82%",
+    backgroundColor: colors.background,
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    paddingTop: 10,
+    paddingHorizontal: 22,
+    paddingBottom: 24,
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.09)",
+  },
+  coverChooserHandle: {
+    alignSelf: "center",
+    width: 42,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "rgba(47,93,80,0.18)",
+    marginBottom: 16,
+  },
+  coverChooserHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 14,
+    backgroundColor: "transparent",
+  },
+  coverChooserHeaderCopy: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: "transparent",
+  },
+  coverChooserTitle: {
+    ...typography.role.pageTitle,
+    color: colors.text,
+    fontSize: 24,
+    lineHeight: 31,
+  },
+  coverChooserBookTitle: {
+    ...typography.role.bookTitle,
+    color: "rgba(31,41,51,0.68)",
+    fontSize: 14,
+    lineHeight: 20,
+    marginTop: 2,
+  },
+  coverChooserCloseButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,248,237,0.62)",
+    borderWidth: 1,
+    borderColor: "rgba(47,93,80,0.08)",
+  },
+  coverChooserHelper: {
+    ...typography.role.body,
+    color: "rgba(31,41,51,0.52)",
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 10,
+    marginBottom: 14,
+  },
+  coverChooserScroll: {
+    maxHeight: 430,
+    backgroundColor: "transparent",
+  },
+  coverChooserGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    gap: 12,
+    paddingVertical: 4,
+    paddingBottom: 14,
+    backgroundColor: "transparent",
+  },
+  coverChooserOption: {
+    width: 88,
+    minHeight: 132,
+    padding: 5,
+    borderRadius: 13,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "transparent",
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  coverChooserOptionSelected: {
+    borderColor: "rgba(47,93,80,0.62)",
+    backgroundColor: "rgba(47,93,80,0.055)",
+  },
+  coverChooserImageFrame: {
+    width: 72,
+    height: 108,
+    borderRadius: 8,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(47,93,80,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(58,46,43,0.08)",
+  },
+  coverChooserImage: {
+    width: "100%",
+    height: "100%",
+  },
+  coverChooserFallback: {
+    ...typography.role.bookTitle,
+    color: "rgba(47,93,80,0.58)",
+    fontSize: 20,
+    lineHeight: 26,
+  },
+  coverChooserSelectedBadge: {
+    position: "absolute",
+    right: 6,
+    bottom: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.accent,
+    borderWidth: 2,
+    borderColor: colors.background,
   },
   homeShortcutStack: {
     flexDirection: "column",
@@ -9872,6 +10682,10 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  manualBookIdentityActions: {
+    alignItems: "flex-end",
+    justifyContent: "center",
+  },
   manualBookIdentityTitle: {
     ...typography.role.bookTitle,
     color: "#FFF8ED",
@@ -10832,6 +11646,21 @@ const styles = StyleSheet.create({
   bookChangeButtonText: {
     ...typography.role.metadata,
     color: "rgba(47,93,80,0.58)",
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  bookCoverChangeButton: {
+    alignSelf: "flex-start",
+    minHeight: 32,
+    justifyContent: "center",
+    backgroundColor: "rgba(47,93,80,0.055)",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    marginTop: 7,
+  },
+  bookCoverChangeButtonText: {
+    ...typography.role.button,
+    color: "rgba(47,93,80,0.70)",
     fontSize: 12,
     lineHeight: 17,
   },
